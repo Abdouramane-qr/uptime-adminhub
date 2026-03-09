@@ -38,7 +38,7 @@ Statut: IN_PROGRESS
 - [x] Générer rapport intermédiaire Sprint 2: `SPRINT_2_INTERMEDIATE_REPORT_2026-03-09.md`.
 
 ## Next actions (Sprint 2)
-- [ ] Ajouter tests d'intégration UI pour pages métier branchées.
+- [x] Ajouter tests d'intégration UI pour pages métier branchées (Billing/Technicians/AuditLogs).
 - [ ] Ajouter observabilité fallback hits (dev/staging).
 - [ ] Préparer bascule recette stricte permanente.
 - [x] Spécifier contrats backend dédiés: `BACKEND_CONTRACTS_SPRINT2_BILLING_TECH_AUDIT.md`.
