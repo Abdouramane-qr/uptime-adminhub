@@ -39,23 +39,11 @@ const AdminRoles = () => {
   const [isAdmin, setIsAdmin] = useState(false);
 
   const loadUsers = useCallback(async () => {
-    // Get profiles with compatibility between schemas (`id` vs `user_id`)
-    let profiles: Array<Record<string, unknown>> = [];
-    let profilesError: Error | null = null;
-
-    const byId = await supabase
+    // Load profile rows without hardcoding a fragile column list.
+    const { data: profilesRaw, error: profilesError } = await supabase
       .from("profiles")
-      .select("id, full_name, avatar_url");
-
-    if (byId.error) {
-      const byUserId = await supabase
-        .from("profiles")
-        .select("user_id, full_name, avatar_url");
-      profilesError = byUserId.error as Error | null;
-      profiles = (byUserId.data as Array<Record<string, unknown>> | null) || [];
-    } else {
-      profiles = (byId.data as Array<Record<string, unknown>> | null) || [];
-    }
+      .select("*");
+    const profiles = (profilesRaw as Array<Record<string, unknown>> | null) || [];
 
     const { data: roles, error: rolesError } = await supabase
       .from("user_roles")

@@ -62,6 +62,8 @@ export async function callSupabaseFunction<T = unknown>(
   const payload = await res.json().catch(() => ({}));
 
   if (res.status === 401) {
+    // Force re-auth on expired/invalid token to avoid silent fallback loops.
+    await (supabase.auth as unknown as { signOut?: () => Promise<unknown> }).signOut?.().catch(() => undefined);
     throw createApiError(payload?.error || "Session expirée.", { code: "unauthorized", httpStatus: 401 });
   }
   if (res.status === 403) {
