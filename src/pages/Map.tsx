@@ -10,6 +10,7 @@ import { Users, Activity, CheckCircle2, MapPin } from "lucide-react";
 import { listProviderPresence, type ProviderPresenceDTO } from "@/lib/adminPortalClient";
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
+import { reportFallbackHit } from "@/lib/fallbackTelemetry";
 
 const allStatuses: MissionStatus[] = ["pending", "assigned", "en_route", "arrived", "in_progress", "completed"];
 
@@ -50,6 +51,7 @@ const Map = () => {
       } catch {
         // Keep mock fallback for non-configured envs.
         setApiBacked(false);
+        reportFallbackHit("Map");
         if (!allowFallback) setProviders([]);
       }
     };

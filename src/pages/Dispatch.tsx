@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { useLanguage } from "@/hooks/useLanguage";
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
+import { reportFallbackHit } from "@/lib/fallbackTelemetry";
 import {
   listProviderPresence,
   listServiceRequests,
@@ -127,6 +128,7 @@ const Dispatch = () => {
         }
       } catch {
         setApiBacked(false);
+        reportFallbackHit("Dispatch:interventions");
         if (!allowFallback) setInterventions([]);
       }
     };
@@ -162,6 +164,7 @@ const Dispatch = () => {
         }
       } catch {
         // Keep mock fallback for non-configured environments.
+        reportFallbackHit("Dispatch:providers");
         if (!allowFallback) setProviders([]);
       }
     };

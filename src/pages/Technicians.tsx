@@ -9,6 +9,7 @@ import { useLanguage } from "@/hooks/useLanguage";
 import { listTechnicians, type TechnicianDTO } from "@/lib/adminPortalClient";
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
+import { reportFallbackHit } from "@/lib/fallbackTelemetry";
 
 type TechStatus = "online" | "offline" | "on_job";
 
@@ -71,6 +72,7 @@ const Technicians = () => {
       } catch {
         // Keep mock fallback
         setApiBacked(false);
+        reportFallbackHit("Technicians");
         if (!allowFallback) setTechnicians([]);
       }
     };

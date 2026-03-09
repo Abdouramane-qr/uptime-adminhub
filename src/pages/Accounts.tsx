@@ -13,6 +13,7 @@ import { useLanguage } from "@/hooks/useLanguage";
 import { createAccount, deleteTenant, listTenants, type TenantDTO, updateTenant } from "@/lib/adminPortalClient";
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
+import { reportFallbackHit } from "@/lib/fallbackTelemetry";
 
 type AccountStatus = "pending" | "approved" | "rejected";
 type AccountType = "SP" | "Fleet";
@@ -110,6 +111,7 @@ const Accounts = () => {
         }
       } catch {
         setApiBacked(false);
+        reportFallbackHit("Accounts");
         if (!allowFallback) setAccounts([]);
       }
     };

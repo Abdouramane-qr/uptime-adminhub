@@ -6,6 +6,7 @@ import { useLanguage } from "@/hooks/useLanguage";
 import { listAuditLogs } from "@/lib/adminPortalClient";
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
+import { reportFallbackHit } from "@/lib/fallbackTelemetry";
 
 type ActionType = "assign" | "status_change" | "create" | "delete" | "update" | "login";
 
@@ -59,6 +60,7 @@ const AuditLogs = () => {
       } catch {
         // Keep mock fallback
         setApiBacked(false);
+        reportFallbackHit("AuditLogs");
         if (!allowFallback) setLogs([]);
       }
     };

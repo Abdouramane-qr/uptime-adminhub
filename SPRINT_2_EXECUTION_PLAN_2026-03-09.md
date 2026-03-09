@@ -39,7 +39,7 @@ Statut: IN_PROGRESS
 
 ## Next actions (Sprint 2)
 - [x] Ajouter tests d'intégration UI pour pages métier branchées (Billing/Technicians/AuditLogs).
-- [ ] Ajouter observabilité fallback hits (dev/staging).
+- [x] Ajouter observabilité fallback hits (dev/staging) via compteur global navigateur + trace console DEV.
 - [ ] Préparer bascule recette stricte permanente.
 - [x] Spécifier contrats backend dédiés: `BACKEND_CONTRACTS_SPRINT2_BILLING_TECH_AUDIT.md`.
 - [x] Ajouter méthodes client dédiées (`listBillingInvoices`, `listTechnicians`, `listAuditLogs`) et basculer Billing/Technicians/AuditLogs avec fallback de compatibilité.

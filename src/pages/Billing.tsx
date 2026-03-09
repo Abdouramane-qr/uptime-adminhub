@@ -10,6 +10,7 @@ import { useLanguage } from "@/hooks/useLanguage";
 import { listBillingInvoices, type BillingStatus } from "@/lib/adminPortalClient";
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
+import { reportFallbackHit } from "@/lib/fallbackTelemetry";
 
 type PaymentStatus = BillingStatus;
 
@@ -63,6 +64,7 @@ const Billing = () => {
       } catch {
         // Keep mock fallback
         setApiBacked(false);
+        reportFallbackHit("Billing");
         if (!allowFallback) setInvoices([]);
       }
     };

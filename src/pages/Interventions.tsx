@@ -26,6 +26,7 @@ import { useLanguage } from "@/hooks/useLanguage";
 import { createServiceRequest, listServiceRequests, type ServiceRequestDTO, updateServiceRequestStatus } from "@/lib/adminPortalClient";
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
+import { reportFallbackHit } from "@/lib/fallbackTelemetry";
 
 type InterventionStatus = "pending" | "assigned" | "en_route" | "arrived" | "in_progress" | "completed" | "cancelled";
 
@@ -216,6 +217,7 @@ const Interventions = () => {
         }
       } catch {
         setApiBacked(false);
+        reportFallbackHit("Interventions");
         if (!allowFallback) setData([]);
       }
     };
