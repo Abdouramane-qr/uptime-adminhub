@@ -39,32 +39,47 @@ const AdminRoles = () => {
   const [isAdmin, setIsAdmin] = useState(false);
 
   const loadUsers = useCallback(async () => {
-    // Get all profiles and their roles
-    const { data: profiles, error: profilesError } = await supabase
+    // Get profiles with compatibility between schemas (`id` vs `user_id`)
+    let profiles: Array<Record<string, unknown>> = [];
+    let profilesError: Error | null = null;
+
+    const byId = await supabase
       .from("profiles")
       .select("id, full_name, avatar_url");
+
+    if (byId.error) {
+      const byUserId = await supabase
+        .from("profiles")
+        .select("user_id, full_name, avatar_url");
+      profilesError = byUserId.error as Error | null;
+      profiles = (byUserId.data as Array<Record<string, unknown>> | null) || [];
+    } else {
+      profiles = (byId.data as Array<Record<string, unknown>> | null) || [];
+    }
 
     const { data: roles, error: rolesError } = await supabase
       .from("user_roles")
       .select("id, user_id, role");
 
     if (profilesError || rolesError) {
-      toast.error("Erreur lors du chargement des utilisateurs");
+      const details = profilesError?.message || rolesError?.message || "Unknown error";
+      toast.error(`Erreur lors du chargement des utilisateurs: ${details}`);
       return;
     }
 
-    const combined: UserWithRole[] = (profiles || []).map((p) => {
-      const userId = p.id;
+    const combined: UserWithRole[] = profiles.map((p) => {
+      const userId = String(p.id || p.user_id || "");
+      if (!userId) return null;
       const userRole = (roles || []).find((r) => r.user_id === userId);
       return {
         user_id: userId,
-        full_name: p.full_name,
-        avatar_url: p.avatar_url,
-        email: p.full_name || userId,
+        full_name: (p.full_name as string | null) || null,
+        avatar_url: (p.avatar_url as string | null) || null,
+        email: String(p.full_name || userId),
         role: (userRole?.role as AppRole) || "user",
         role_id: userRole?.id || "",
       };
-    });
+    }).filter((u): u is UserWithRole => !!u);
 
     setUsers(combined);
   }, []);
