@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { mockProviders } from "@/data/mockProviders";
@@ -7,12 +7,55 @@ import ProviderMarker from "@/components/map/ProviderMarker";
 import MissionPanel from "@/components/map/MissionPanel";
 import { cn } from "@/lib/utils";
 import { Users, Activity, CheckCircle2, MapPin } from "lucide-react";
+import { listProviderPresence, type ProviderPresenceDTO } from "@/lib/adminPortalClient";
+import DataSourceBadge from "@/components/DataSourceBadge";
+import { allowMockFallback } from "@/lib/runtimeFlags";
 
 const allStatuses: MissionStatus[] = ["pending", "assigned", "en_route", "arrived", "in_progress", "completed"];
 
 const Map = () => {
+  const allowFallback = allowMockFallback();
   const [selected, setSelected] = useState<ProviderPosition | null>(null);
   const [activeFilters, setActiveFilters] = useState<Set<MissionStatus>>(new Set());
+  const [providers, setProviders] = useState<ProviderPosition[]>(allowFallback ? mockProviders : []);
+  const [apiBacked, setApiBacked] = useState(false);
+
+  useEffect(() => {
+    const mapStatus = (row: ProviderPresenceDTO): MissionStatus => {
+      const s = String(row.status || "").toLowerCase();
+      if (s === "pending" || s === "assigned" || s === "en_route" || s === "arrived" || s === "in_progress" || s === "completed") {
+        return s;
+      }
+      return row.is_available ? "pending" : "in_progress";
+    };
+
+    const mapProvider = (row: ProviderPresenceDTO): ProviderPosition => ({
+      id: String(row.provider_id || row.id || `provider-${Math.random().toString(36).slice(2, 8)}`),
+      name: row.display_name || row.name || "Provider",
+      status: mapStatus(row),
+      lat: Number(row.lat) || 48.8566,
+      lng: Number(row.lng) || 2.3522,
+      phone: row.phone || "N/A",
+      currentMission: null,
+      completedMissions: 0,
+    });
+
+    const load = async () => {
+      try {
+        const rows = await listProviderPresence();
+        if (rows.length > 0) {
+          setProviders(rows.map(mapProvider));
+          setApiBacked(true);
+        }
+      } catch {
+        // Keep mock fallback for non-configured envs.
+        setApiBacked(false);
+        if (!allowFallback) setProviders([]);
+      }
+    };
+
+    void load();
+  }, [allowFallback]);
 
   const toggleFilter = (status: MissionStatus) => {
     setActiveFilters((prev) => {
@@ -24,12 +67,12 @@ const Map = () => {
   };
 
   const filteredProviders = useMemo(
-    () => activeFilters.size === 0 ? mockProviders : mockProviders.filter((p) => activeFilters.has(p.status)),
-    [activeFilters]
+    () => activeFilters.size === 0 ? providers : providers.filter((p) => activeFilters.has(p.status)),
+    [activeFilters, providers]
   );
 
-  const totalActive = mockProviders.filter((p) => ["en_route", "arrived", "in_progress"].includes(p.status)).length;
-  const totalMissions = mockProviders.filter((p) => p.currentMission).length;
+  const totalActive = providers.filter((p) => ["en_route", "arrived", "in_progress"].includes(p.status)).length;
+  const totalMissions = providers.filter((p) => p.currentMission).length;
 
   return (
     <div className="space-y-4">
@@ -37,14 +80,17 @@ const Map = () => {
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Carte de suivi</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Suivi en temps réel des prestataires</p>
+          <p className="text-sm text-muted-foreground mt-0.5 flex items-center gap-2">
+            <span>Suivi en temps réel des prestataires</span>
+            <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
+          </p>
         </div>
 
         {/* Stats pills */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-card border border-border">
             <Users className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-xs font-medium text-foreground">{mockProviders.length}</span>
+            <span className="text-xs font-medium text-foreground">{providers.length}</span>
             <span className="text-xs text-muted-foreground">prestataires</span>
           </div>
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-success/10 border border-success/20">
@@ -66,7 +112,7 @@ const Map = () => {
         {allStatuses.map((s) => {
           const cfg = STATUS_CONFIG[s];
           const active = activeFilters.has(s);
-          const count = mockProviders.filter((p) => p.status === s).length;
+          const count = providers.filter((p) => p.status === s).length;
           return (
             <button
               key={s}
@@ -131,7 +177,7 @@ const Map = () => {
         <div className="absolute top-4 left-4 z-[1000] bg-card/90 backdrop-blur-sm border border-border rounded-xl shadow-md px-3 py-2">
           <span className="text-xs font-semibold text-foreground">{filteredProviders.length}</span>
           <span className="text-xs text-muted-foreground ml-1">
-            {filteredProviders.length === mockProviders.length ? "prestataires" : `/ ${mockProviders.length} affichés`}
+            {filteredProviders.length === providers.length ? "prestataires" : `/ ${providers.length} affichés`}
           </span>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, DollarSign, TrendingUp, FileText, CreditCard, Users, ArrowRight, CheckCircle2, Clock, AlertTriangle, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -7,8 +7,11 @@ import { exportCSV, exportPDF } from "@/lib/export";
 import { toast } from "@/hooks/use-toast";
 import EmptyState from "@/components/EmptyState";
 import { useLanguage } from "@/hooks/useLanguage";
+import { listBillingInvoices, type BillingStatus } from "@/lib/adminPortalClient";
+import DataSourceBadge from "@/components/DataSourceBadge";
+import { allowMockFallback } from "@/lib/runtimeFlags";
 
-type PaymentStatus = "paid" | "pending" | "overdue" | "cancelled";
+type PaymentStatus = BillingStatus;
 
 interface Invoice {
   id: string; date: string; client: string; provider: string;
@@ -30,8 +33,42 @@ const formatCurrency = (v: number) => `${v.toFixed(2)} €`;
 
 const Billing = () => {
   const { t } = useLanguage();
+  const allowFallback = allowMockFallback();
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<PaymentStatus | "all">("all");
+  const [invoices, setInvoices] = useState<Invoice[]>(allowFallback ? mockInvoices : []);
+  const [apiBacked, setApiBacked] = useState(false);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const payload = await listBillingInvoices();
+        if (payload.items.length > 0) {
+          const mapped = payload.items.map((r, idx): Invoice => {
+            const amount = Number(r.amount ?? 0) || 0;
+            return {
+              id: r.id || `INV-${String(5000 + idx)}`,
+              date: r.date || new Date().toISOString().slice(0, 10),
+              client: r.client || "Client",
+              provider: r.provider || "Provider",
+              interventionId: r.intervention_id || "N/A",
+              amount,
+              commission: Number(r.commission ?? Number((amount * 0.15).toFixed(2))),
+              status: (r.status as PaymentStatus) || "pending",
+            };
+          });
+          setInvoices(mapped);
+          setApiBacked(true);
+        }
+      } catch {
+        // Keep mock fallback
+        setApiBacked(false);
+        if (!allowFallback) setInvoices([]);
+      }
+    };
+
+    void load();
+  }, [allowFallback]);
 
   const paymentStatusConfig: Record<PaymentStatus, { label: string; bg: string; text: string; dot: string }> = {
     paid: { label: t("billing.paid"), bg: "bg-success/10", text: "text-success", dot: "bg-success" },
@@ -40,17 +77,17 @@ const Billing = () => {
     cancelled: { label: t("billing.cancelled"), bg: "bg-muted", text: "text-muted-foreground", dot: "bg-muted-foreground" },
   };
 
-  const filtered = mockInvoices.filter(i => {
+  const filtered = invoices.filter(i => {
     const matchSearch = i.id.toLowerCase().includes(search.toLowerCase()) || i.client.toLowerCase().includes(search.toLowerCase()) || i.provider.toLowerCase().includes(search.toLowerCase());
     const matchStatus = filterStatus === "all" || i.status === filterStatus;
     return matchSearch && matchStatus;
   });
 
-  const totalRevenue = mockInvoices.filter(i => i.status === "paid").reduce((s, i) => s + i.amount, 0);
-  const totalCommissions = mockInvoices.filter(i => i.status === "paid").reduce((s, i) => s + i.commission, 0);
-  const pendingAmount = mockInvoices.filter(i => i.status === "pending" || i.status === "overdue").reduce((s, i) => s + i.amount, 0);
+  const totalRevenue = useMemo(() => invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.amount, 0), [invoices]);
+  const totalCommissions = useMemo(() => invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.commission, 0), [invoices]);
+  const pendingAmount = useMemo(() => invoices.filter(i => i.status === "pending" || i.status === "overdue").reduce((s, i) => s + i.amount, 0), [invoices]);
 
-  const providerEarnings = mockInvoices
+  const providerEarnings = invoices
     .filter(i => i.status === "paid")
     .reduce((acc, inv) => {
       if (!acc[inv.provider]) acc[inv.provider] = { provider: inv.provider, total: 0, commissions: 0, count: 0 };
@@ -61,7 +98,7 @@ const Billing = () => {
     }, {} as Record<string, { provider: string; total: number; commissions: number; count: number }>);
 
   const handleExportCSV = () => {
-    const data = mockInvoices.map(i => ({
+    const data = invoices.map(i => ({
       [t("billing.invoice_id")]: i.id, [t("billing.date")]: i.date, [t("billing.client")]: i.client,
       [t("billing.provider")]: i.provider, [t("billing.intervention")]: i.interventionId,
       [t("billing.amount")]: i.amount.toFixed(2), [t("billing.commission")]: i.commission.toFixed(2),
@@ -73,7 +110,7 @@ const Billing = () => {
 
   const handleExportPDF = () => {
     const headers = [t("billing.invoice_id"), t("billing.date"), t("billing.client"), t("billing.provider"), t("billing.amount"), t("billing.commission"), t("billing.status")];
-    const rows = mockInvoices.map(i => [i.id, i.date, i.client, i.provider, `${i.amount.toFixed(2)} €`, `${i.commission.toFixed(2)} €`, paymentStatusConfig[i.status].label]);
+    const rows = invoices.map(i => [i.id, i.date, i.client, i.provider, `${i.amount.toFixed(2)} €`, `${i.commission.toFixed(2)} €`, paymentStatusConfig[i.status].label]);
     exportPDF("Factures — Fleet Rescue", headers, rows, "factures-rapport");
     toast({ title: t("billing.pdf_title"), description: t("billing.pdf_desc") });
   };
@@ -85,7 +122,10 @@ const Billing = () => {
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground tracking-tight">{t("billing.title")}</h1>
-          <p className="text-muted-foreground mt-1">{t("billing.subtitle")}</p>
+          <p className="text-muted-foreground mt-1 flex items-center gap-2">
+            <span>{t("billing.subtitle")}</span>
+            <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" className="rounded-xl gap-2" onClick={handleExportCSV}><Download className="h-3.5 w-3.5" /> CSV</Button>

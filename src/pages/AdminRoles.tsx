@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Shield, UserCheck, Search, Loader2, Crown, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,11 +38,38 @@ const AdminRoles = () => {
   const [updating, setUpdating] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
-  useEffect(() => {
-    checkAdminAndLoad();
-  }, [user]);
+  const loadUsers = useCallback(async () => {
+    // Get all profiles and their roles
+    const { data: profiles, error: profilesError } = await supabase
+      .from("profiles")
+      .select("id, full_name, avatar_url");
 
-  const checkAdminAndLoad = async () => {
+    const { data: roles, error: rolesError } = await supabase
+      .from("user_roles")
+      .select("id, user_id, role");
+
+    if (profilesError || rolesError) {
+      toast.error("Erreur lors du chargement des utilisateurs");
+      return;
+    }
+
+    const combined: UserWithRole[] = (profiles || []).map((p) => {
+      const userId = p.id;
+      const userRole = (roles || []).find((r) => r.user_id === userId);
+      return {
+        user_id: userId,
+        full_name: p.full_name,
+        avatar_url: p.avatar_url,
+        email: p.full_name || userId,
+        role: (userRole?.role as AppRole) || "user",
+        role_id: userRole?.id || "",
+      };
+    });
+
+    setUsers(combined);
+  }, []);
+
+  const checkAdminAndLoad = useCallback(async () => {
     if (!user) return;
 
     // Check if current user is admin
@@ -57,37 +84,11 @@ const AdminRoles = () => {
       await loadUsers();
     }
     setLoading(false);
-  };
+  }, [loadUsers, user]);
 
-  const loadUsers = async () => {
-    // Get all profiles and their roles
-    const { data: profiles, error: profilesError } = await supabase
-      .from("profiles")
-      .select("user_id, full_name, avatar_url");
-
-    const { data: roles, error: rolesError } = await supabase
-      .from("user_roles")
-      .select("id, user_id, role");
-
-    if (profilesError || rolesError) {
-      toast.error("Erreur lors du chargement des utilisateurs");
-      return;
-    }
-
-    const combined: UserWithRole[] = (profiles || []).map((p) => {
-      const userRole = (roles || []).find((r) => r.user_id === p.user_id);
-      return {
-        user_id: p.user_id,
-        full_name: p.full_name,
-        avatar_url: p.avatar_url,
-        email: p.full_name || p.user_id,
-        role: (userRole?.role as AppRole) || "user",
-        role_id: userRole?.id || "",
-      };
-    });
-
-    setUsers(combined);
-  };
+  useEffect(() => {
+    void checkAdminAndLoad();
+  }, [checkAdminAndLoad]);
 
   const handleRoleChange = async (userId: string, roleId: string, newRole: AppRole) => {
     setUpdating(userId);

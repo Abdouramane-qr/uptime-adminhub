@@ -32,6 +32,18 @@ jobs:
       - name: Unit tests
         run: npm run test
 
+      - name: Backend client wiring tests
+        run: npm run test:backend-client
+
+      - name: Strict backend guard
+        run: npm run qa:strict-backend
+
+      - name: Strict backend build
+        run: npm run build:strict-backend
+
+      - name: Backend link full gate
+        run: npm run qa:backend-link:full
+
       - name: Coverage
         run: npm run test:coverage
 

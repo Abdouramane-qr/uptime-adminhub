@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { mockProviders } from "@/data/mockProviders";
@@ -20,6 +20,15 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { useLanguage } from "@/hooks/useLanguage";
+import DataSourceBadge from "@/components/DataSourceBadge";
+import { allowMockFallback } from "@/lib/runtimeFlags";
+import {
+  listProviderPresence,
+  listServiceRequests,
+  type ProviderPresenceDTO,
+  type ServiceRequestDTO,
+  updateServiceRequestStatus,
+} from "@/lib/adminPortalClient";
 
 type InterventionStatus = "pending" | "assigned" | "en_route" | "arrived" | "in_progress" | "completed";
 
@@ -51,10 +60,9 @@ const timeSince = (date: Date) => {
   return `${Math.floor(mins / 60)}h${mins % 60 > 0 ? String(mins % 60).padStart(2, "0") : ""}`;
 };
 
-const availableProviders = mockProviders.filter(p => p.status === "pending" || p.status === "completed");
-
 const Dispatch = () => {
   const { t } = useLanguage();
+  const allowFallback = allowMockFallback();
 
   const statusConfig: Record<InterventionStatus, { label: string; color: string; icon: React.ElementType }> = {
     pending: { label: t("status.pending"), color: "hsl(var(--muted-foreground))", icon: Clock },
@@ -71,13 +79,100 @@ const Dispatch = () => {
     critical: { label: t("dispatch.urgency_critical"), bg: "bg-destructive/10", text: "text-destructive" },
   };
 
-  const [interventions, setInterventions] = useState(initialInterventions);
+  const [interventions, setInterventions] = useState(allowFallback ? initialInterventions : []);
+  const [apiBacked, setApiBacked] = useState(false);
+  const [providers, setProviders] = useState<ProviderPosition[]>(allowFallback ? mockProviders : []);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<InterventionStatus | "all">("all");
   const [selectedIntervention, setSelectedIntervention] = useState<DispatchIntervention | null>(null);
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignProvider, setAssignProvider] = useState("");
   const [selectedMapProvider, setSelectedMapProvider] = useState<ProviderPosition | null>(null);
+
+  useEffect(() => {
+    const toNum = (v: unknown, fallback: number) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : fallback;
+    };
+
+    const mapStatus = (v: string | undefined): InterventionStatus => {
+      const s = String(v || "").toLowerCase();
+      if (s === "pending" || s === "assigned" || s === "en_route" || s === "arrived" || s === "in_progress" || s === "completed") {
+        return s;
+      }
+      return "pending";
+    };
+
+    const mapItem = (r: ServiceRequestDTO): DispatchIntervention => ({
+      id: r.id,
+      client: r.client_name || r.client || r.fleet_manager || "Client",
+      location: r.location || r.address || "Location inconnue",
+      lat: toNum(r.pickup_lat ?? r.lat, 48.8566),
+      lng: toNum(r.pickup_lng ?? r.lng, 2.3522),
+      type: r.service_type || r.type || "Assistance",
+      status: mapStatus(r.status),
+      createdAt: new Date(r.created_at || Date.now()),
+      assignedProvider: r.assigned_provider || r.provider_name || undefined,
+      urgency: (["normal", "high", "critical"].includes(String(r.urgency || "").toLowerCase())
+        ? String(r.urgency).toLowerCase()
+        : "normal") as "normal" | "high" | "critical",
+    });
+
+    const load = async () => {
+      try {
+        const rows = await listServiceRequests();
+        if (rows.length > 0) {
+          setInterventions(rows.map(mapItem));
+          setApiBacked(true);
+        }
+      } catch {
+        setApiBacked(false);
+        if (!allowFallback) setInterventions([]);
+      }
+    };
+
+    void load();
+  }, [allowFallback]);
+
+  useEffect(() => {
+    const mapStatus = (row: ProviderPresenceDTO): MissionStatus => {
+      const s = String(row.status || "").toLowerCase();
+      if (s === "pending" || s === "assigned" || s === "en_route" || s === "arrived" || s === "in_progress" || s === "completed") {
+        return s;
+      }
+      return row.is_available ? "pending" : "in_progress";
+    };
+
+    const mapProvider = (row: ProviderPresenceDTO): ProviderPosition => ({
+      id: String(row.provider_id || row.id || `provider-${Math.random().toString(36).slice(2, 8)}`),
+      name: row.display_name || row.name || "Provider",
+      status: mapStatus(row),
+      lat: Number(row.lat) || 48.8566,
+      lng: Number(row.lng) || 2.3522,
+      phone: row.phone || "N/A",
+      currentMission: null,
+      completedMissions: 0,
+    });
+
+    const loadProviders = async () => {
+      try {
+        const rows = await listProviderPresence();
+        if (rows.length > 0) {
+          setProviders(rows.map(mapProvider));
+        }
+      } catch {
+        // Keep mock fallback for non-configured environments.
+        if (!allowFallback) setProviders([]);
+      }
+    };
+
+    void loadProviders();
+  }, [allowFallback]);
+
+  const availableProviders = useMemo(
+    () => providers.filter((p) => p.status === "pending" || p.status === "completed"),
+    [providers],
+  );
 
   const filtered = useMemo(() => {
     return interventions.filter(i => {
@@ -94,6 +189,14 @@ const Dispatch = () => {
 
   const handleAssign = () => {
     if (!selectedIntervention || !assignProvider) return;
+    if (apiBacked) {
+      void updateServiceRequestStatus(selectedIntervention.id, {
+        status: "assigned",
+        assigned_provider: assignProvider,
+      }).catch(() => {
+        toast({ title: t("dispatch.update_error"), description: t("dispatch.update_error_desc"), variant: "destructive" });
+      });
+    }
     setInterventions(prev => prev.map(i =>
       i.id === selectedIntervention.id ? { ...i, status: "assigned" as const, assignedProvider: assignProvider } : i
     ));
@@ -108,6 +211,11 @@ const Dispatch = () => {
     const idx = flow.indexOf(intervention.status);
     if (idx < 0 || idx >= flow.length - 1) return;
     const next = flow[idx + 1];
+    if (apiBacked) {
+      void updateServiceRequestStatus(intervention.id, { status: next }).catch(() => {
+        toast({ title: t("dispatch.update_error"), description: t("dispatch.update_error_desc"), variant: "destructive" });
+      });
+    }
     setInterventions(prev => prev.map(i => i.id === intervention.id ? { ...i, status: next } : i));
     toast({ title: t("dispatch.status_updated"), description: `${intervention.id} → ${statusConfig[next].label}` });
   };
@@ -118,7 +226,10 @@ const Dispatch = () => {
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground tracking-tight">{t("dispatch.title")}</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{t("dispatch.subtitle")}</p>
+          <p className="text-sm text-muted-foreground mt-0.5 flex items-center gap-2">
+            <span>{t("dispatch.subtitle")}</span>
+            <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
+          </p>
         </div>
         <div className="flex items-center gap-3">
           {pendingCount > 0 && (
@@ -221,7 +332,7 @@ const Dispatch = () => {
         <div className="lg:col-span-3 relative rounded-2xl overflow-hidden border border-border">
           <MapContainer center={[48.86, 2.34]} zoom={13} className="h-full w-full" zoomControl={false}>
             <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-            {mockProviders.map(p => <ProviderMarker key={p.id} provider={p} onSelect={setSelectedMapProvider} />)}
+            {providers.map(p => <ProviderMarker key={p.id} provider={p} onSelect={setSelectedMapProvider} />)}
           </MapContainer>
           <MissionPanel provider={selectedMapProvider} onClose={() => setSelectedMapProvider(null)} />
           <div className="absolute bottom-4 left-4 z-[1000] bg-card/90 backdrop-blur-sm border border-border rounded-xl shadow-md p-3">
@@ -256,7 +367,7 @@ const Dispatch = () => {
                 <Select value={assignProvider} onValueChange={setAssignProvider}>
                   <SelectTrigger className="rounded-xl"><SelectValue placeholder={t("dispatch.select_provider")} /></SelectTrigger>
                   <SelectContent>
-                    {mockProviders.map(p => (
+                    {availableProviders.map(p => (
                       <SelectItem key={p.id} value={p.name}>
                         <div className="flex items-center gap-2">
                           <div className="h-2 w-2 rounded-full" style={{ background: STATUS_CONFIG[p.status].color }} />

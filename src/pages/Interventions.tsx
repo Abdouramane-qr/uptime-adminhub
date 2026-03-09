@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import EmptyState from "@/components/EmptyState";
 import { format } from "date-fns";
 import { toast } from "@/hooks/use-toast";
@@ -23,6 +23,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/hooks/useLanguage";
+import { createServiceRequest, listServiceRequests, type ServiceRequestDTO, updateServiceRequestStatus } from "@/lib/adminPortalClient";
+import DataSourceBadge from "@/components/DataSourceBadge";
+import { allowMockFallback } from "@/lib/runtimeFlags";
 
 type InterventionStatus = "pending" | "assigned" | "en_route" | "arrived" | "in_progress" | "completed" | "cancelled";
 
@@ -89,8 +92,9 @@ const emptyForm = {
 
 const Interventions = () => {
   const { t } = useLanguage();
+  const allowFallback = allowMockFallback();
 
-  const statusLabels: Record<string, string> = {
+  const statusLabels: Record<string, string> = useMemo(() => ({
     created: t("interventions.created"),
     assigned: t("interventions.assigned"),
     en_route: t("interventions.en_route"),
@@ -98,7 +102,7 @@ const Interventions = () => {
     in_progress: t("interventions.in_progress"),
     completed: t("interventions.completed"),
     cancelled: t("interventions.cancelled"),
-  };
+  }), [t]);
 
   const makeInitial = (): Intervention[] => [
     {
@@ -164,7 +168,8 @@ const Interventions = () => {
   const allStatuses: InterventionStatus[] = ["pending", "assigned", "en_route", "arrived", "in_progress", "completed", "cancelled"];
   const statusFlow: InterventionStatus[] = ["pending", "assigned", "en_route", "arrived", "in_progress", "completed"];
 
-  const [data, setData] = useState<Intervention[]>(makeInitial);
+  const [data, setData] = useState<Intervention[]>(allowFallback ? makeInitial : []);
+  const [apiBacked, setApiBacked] = useState(false);
   const [search, setSearch] = useState("");
   const [activeFilters, setActiveFilters] = useState<Set<InterventionStatus>>(new Set());
   const [dateFrom, setDateFrom] = useState<Date>();
@@ -174,6 +179,49 @@ const Interventions = () => {
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Intervention | null>(null);
   const [form, setForm] = useState(emptyForm);
+
+  useEffect(() => {
+    const mapStatus = (v: string | undefined): InterventionStatus => {
+      const s = String(v || "").toLowerCase();
+      if (s === "pending" || s === "assigned" || s === "en_route" || s === "arrived" || s === "in_progress" || s === "completed" || s === "cancelled") {
+        return s;
+      }
+      return "pending";
+    };
+
+    const mapItem = (r: ServiceRequestDTO): Intervention => {
+      const status = mapStatus(r.status);
+      return {
+        id: r.id,
+        fleetManager: r.fleet_manager || r.client_name || r.client || "N/A",
+        serviceProvider: r.provider_name || r.assigned_provider || "N/A",
+        technician: "N/A",
+        vehiclePlate: "N/A",
+        vehicleModel: "N/A",
+        vehicleYear: new Date().getFullYear(),
+        serviceType: r.service_type || r.type || "Assistance",
+        status,
+        created: r.created_at ? format(new Date(r.created_at), "d MMM yyyy") : format(new Date(), "d MMM yyyy"),
+        location: r.location || r.address || "N/A",
+        timeline: fullTimeline(status, { created: r.created_at ? format(new Date(r.created_at), "d MMM, HH:mm") : now() }, statusLabels),
+      };
+    };
+
+    const load = async () => {
+      try {
+        const rows = await listServiceRequests();
+        if (rows.length > 0) {
+          setData(rows.map(mapItem));
+          setApiBacked(true);
+        }
+      } catch {
+        setApiBacked(false);
+        if (!allowFallback) setData([]);
+      }
+    };
+
+    void load();
+  }, [allowFallback, statusLabels]);
 
   const toggleFilter = (status: InterventionStatus) => {
     setActiveFilters((prev) => {
@@ -216,6 +264,18 @@ const Interventions = () => {
       status: "pending", created: format(new Date(), "d MMM yyyy"),
       timeline: fullTimeline("pending", { created: now() }, statusLabels),
     };
+    if (apiBacked) {
+      void createServiceRequest({
+        service_type: form.serviceType,
+        location: form.location,
+        breakdown_details: `${form.vehicleModel} ${form.vehiclePlate}`.trim(),
+        provider_name: form.serviceProvider,
+        fleet_manager: form.fleetManager,
+        status: "pending",
+      }).catch(() => {
+        toast({ title: t("interventions.create_error"), description: t("interventions.create_error_desc"), variant: "destructive" });
+      });
+    }
     setData([newIntervention, ...data]);
     setCreateOpen(false);
     setForm(emptyForm);
@@ -232,6 +292,11 @@ const Interventions = () => {
       if (i <= idx + 1) dates[stepKeyMap[s]] = i <= idx ? (intervention.timeline[i]?.date || now()) : now();
     });
     const updated: Intervention = { ...intervention, status: nextStatus, timeline: fullTimeline(nextStatus, dates, statusLabels) };
+    if (apiBacked) {
+      void updateServiceRequestStatus(intervention.id, { status: nextStatus }).catch(() => {
+        toast({ title: t("interventions.update_error"), description: t("interventions.update_error_desc"), variant: "destructive" });
+      });
+    }
     setData(data.map(d => d.id === intervention.id ? updated : d));
     setSelectedIntervention(updated);
     toast({ title: t("interventions.status_updated"), description: `${intervention.id} → ${statusConfig[nextStatus].label}` });
@@ -242,6 +307,11 @@ const Interventions = () => {
       ...intervention, status: "cancelled",
       timeline: fullTimeline("cancelled", { created: intervention.timeline[0]?.date || now(), cancelled: now() }, statusLabels),
     };
+    if (apiBacked) {
+      void updateServiceRequestStatus(intervention.id, { status: "cancelled" }).catch(() => {
+        toast({ title: t("interventions.update_error"), description: t("interventions.update_error_desc"), variant: "destructive" });
+      });
+    }
     setData(data.map(d => d.id === intervention.id ? updated : d));
     setSelectedIntervention(updated);
     toast({ title: t("interventions.cancelled_success"), description: `${intervention.id}` });
@@ -268,7 +338,10 @@ const Interventions = () => {
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground tracking-tight">{t("interventions.title")}</h1>
-          <p className="text-muted-foreground mt-1">{t("interventions.subtitle")}</p>
+          <p className="text-muted-foreground mt-1 flex items-center gap-2">
+            <span>{t("interventions.subtitle")}</span>
+            <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-success/10 border border-success/20">

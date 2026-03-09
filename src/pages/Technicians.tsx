@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Search, Star, Phone, MapPin, Filter, ChevronRight, X, Wrench, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -6,6 +6,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Progress } from "@/components/ui/progress";
 import EmptyState from "@/components/EmptyState";
 import { useLanguage } from "@/hooks/useLanguage";
+import { listTechnicians, type TechnicianDTO } from "@/lib/adminPortalClient";
+import DataSourceBadge from "@/components/DataSourceBadge";
+import { allowMockFallback } from "@/lib/runtimeFlags";
 
 type TechStatus = "online" | "offline" | "on_job";
 
@@ -37,9 +40,43 @@ const RatingStars = ({ rating }: { rating: number }) => (
 
 const Technicians = () => {
   const { t } = useLanguage();
+  const allowFallback = allowMockFallback();
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<TechStatus | "all">("all");
   const [selected, setSelected] = useState<Technician | null>(null);
+  const [technicians, setTechnicians] = useState<Technician[]>(allowFallback ? mockTechnicians : []);
+  const [apiBacked, setApiBacked] = useState(false);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const techniciansRows = await listTechnicians();
+        if (techniciansRows.length > 0) {
+          const mapped = techniciansRows.map((row: TechnicianDTO, idx): Technician => ({
+            id: row.id || `T${String(idx + 1).padStart(3, "0")}`,
+            name: row.name || `Technicien ${idx + 1}`,
+            provider: row.provider || row.name || "Provider",
+            status: (row.status as TechStatus) || "offline",
+            phone: row.phone || "N/A",
+            location: row.location || "N/A",
+            completedInterventions: row.completed_interventions || 0,
+            rating: row.rating || 4.5,
+            specialties: row.specialties?.length ? row.specialties : ["Assistance routière"],
+            currentMission: row.current_mission,
+            joinedAt: row.joined_at || "N/A",
+          }));
+          setTechnicians(mapped);
+          setApiBacked(true);
+        }
+      } catch {
+        // Keep mock fallback
+        setApiBacked(false);
+        if (!allowFallback) setTechnicians([]);
+      }
+    };
+
+    void load();
+  }, [allowFallback]);
 
   const techStatusConfig: Record<TechStatus, { label: string; dot: string; bg: string; text: string }> = {
     online: { label: t("tech.online"), dot: "bg-success", bg: "bg-success/10", text: "text-success" },
@@ -47,14 +84,14 @@ const Technicians = () => {
     on_job: { label: t("tech.on_job"), dot: "bg-warning", bg: "bg-warning/10", text: "text-warning" },
   };
 
-  const filtered = mockTechnicians.filter(t => {
+  const filtered = technicians.filter(t => {
     const matchSearch = t.name.toLowerCase().includes(search.toLowerCase()) || t.provider.toLowerCase().includes(search.toLowerCase()) || t.id.toLowerCase().includes(search.toLowerCase());
     const matchStatus = filterStatus === "all" || t.status === filterStatus;
     return matchSearch && matchStatus;
   });
 
-  const onlineCount = mockTechnicians.filter(t => t.status === "online").length;
-  const onJobCount = mockTechnicians.filter(t => t.status === "on_job").length;
+  const onlineCount = technicians.filter(t => t.status === "online").length;
+  const onJobCount = technicians.filter(t => t.status === "on_job").length;
 
   const tableHeaders = [t("tech.col_id"), t("tech.col_name"), t("tech.col_provider"), t("tech.col_status"), t("tech.col_specialties"), t("tech.col_missions"), t("tech.col_rating"), t("tech.col_location"), ""];
 
@@ -63,7 +100,10 @@ const Technicians = () => {
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground tracking-tight">{t("tech.title")}</h1>
-          <p className="text-muted-foreground mt-1">{t("tech.subtitle")}</p>
+          <p className="text-muted-foreground mt-1 flex items-center gap-2">
+            <span>{t("tech.subtitle")}</span>
+            <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-success/10 border border-success/20">

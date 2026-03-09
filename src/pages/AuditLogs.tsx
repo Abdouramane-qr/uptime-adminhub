@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Search, Filter, User, Settings, Truck, Wrench, Clock, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import EmptyState from "@/components/EmptyState";
 import { useLanguage } from "@/hooks/useLanguage";
+import { listAuditLogs } from "@/lib/adminPortalClient";
+import DataSourceBadge from "@/components/DataSourceBadge";
+import { allowMockFallback } from "@/lib/runtimeFlags";
 
 type ActionType = "assign" | "status_change" | "create" | "delete" | "update" | "login";
 
@@ -29,8 +32,39 @@ const allActions: ActionType[] = ["assign", "status_change", "create", "delete",
 
 const AuditLogs = () => {
   const { t } = useLanguage();
+  const allowFallback = allowMockFallback();
   const [search, setSearch] = useState("");
   const [filterAction, setFilterAction] = useState<ActionType | "all">("all");
+  const [logs, setLogs] = useState<AuditLog[]>(allowFallback ? mockLogs : []);
+  const [apiBacked, setApiBacked] = useState(false);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const auditRows = await listAuditLogs();
+        if (auditRows.length > 0) {
+          const mapped: AuditLog[] = auditRows.map((r, idx) => ({
+            id: r.id || `LOG-${idx + 1}`,
+            date: r.date
+              ? new Date(r.date).toLocaleString("fr-FR", { hour12: false })
+              : new Date().toLocaleString("fr-FR", { hour12: false }),
+            actor: r.actor || "Admin User",
+            action: (r.action as ActionType) || "update",
+            description: r.description || `Audit log ${r.id || idx + 1}`,
+            target: r.target || "N/A",
+          }));
+          setLogs(mapped);
+          setApiBacked(true);
+        }
+      } catch {
+        // Keep mock fallback
+        setApiBacked(false);
+        if (!allowFallback) setLogs([]);
+      }
+    };
+
+    void load();
+  }, [allowFallback]);
 
   const actionConfig: Record<ActionType, { label: string; icon: React.ElementType; bg: string; text: string }> = {
     assign: { label: t("audit.assign"), icon: User, bg: "bg-info/10", text: "text-info" },
@@ -41,7 +75,7 @@ const AuditLogs = () => {
     login: { label: t("audit.login"), icon: User, bg: "bg-muted", text: "text-muted-foreground" },
   };
 
-  const filtered = mockLogs.filter(l => {
+  const filtered = logs.filter(l => {
     const matchSearch = l.description.toLowerCase().includes(search.toLowerCase()) || l.target.toLowerCase().includes(search.toLowerCase()) || l.actor.toLowerCase().includes(search.toLowerCase());
     const matchAction = filterAction === "all" || l.action === filterAction;
     return matchSearch && matchAction;
@@ -53,7 +87,10 @@ const AuditLogs = () => {
     <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="text-3xl font-bold text-foreground tracking-tight">{t("audit.title")}</h1>
-        <p className="text-muted-foreground mt-1">{t("audit.subtitle")}</p>
+        <p className="text-muted-foreground mt-1 flex items-center gap-2">
+          <span>{t("audit.subtitle")}</span>
+          <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
+        </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

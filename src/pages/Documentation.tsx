@@ -67,7 +67,7 @@ const sections: DocSection[] = [
         "Prestataires connectés",
         "Taux de complétion",
       ]},
-      { type: "callout", variant: "info", text: "Le dashboard se rafraîchit automatiquement. Les données sont actuellement mockées et seront connectées au backend." },
+      { type: "callout", variant: "info", text: "Le dashboard se rafraîchit automatiquement. Les pages migrées sont branchées backend avec fallback mock contrôlé via VITE_ALLOW_MOCK_FALLBACK." },
     ],
   },
   {
@@ -397,7 +397,7 @@ const { theme, toggleTheme } = useTheme();
 ├── lib/                  # utils.ts, export.ts (PDF/CSV)
 ├── pages/                # Pages admin
 │   └── sp/               # Pages portail prestataire
-├── data/                 # Données mock (mockProviders)
+├── data/                 # Jeux de données fallback/mock
 └── types/                # Types TypeScript (map.ts)` },
       { type: "heading", text: "Conventions" },
       { type: "list", items: [
@@ -405,7 +405,7 @@ const { theme, toggleTheme } = useTheme();
         "Hooks en camelCase (useTheme.tsx)",
         "Pages en PascalCase (Dispatch.tsx)",
         "Types dans src/types/",
-        "Données mock dans src/data/",
+        "Fallback mock piloté par runtime flag (VITE_ALLOW_MOCK_FALLBACK)",
         "Utilitaires dans src/lib/",
       ]},
     ],

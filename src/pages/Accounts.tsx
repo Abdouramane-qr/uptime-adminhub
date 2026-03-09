@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import EmptyState from "@/components/EmptyState";
 import {
   Search, Download, Eye, Check, X, ChevronLeft, ChevronRight,
@@ -10,12 +10,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { useLanguage } from "@/hooks/useLanguage";
+import { createAccount, deleteTenant, listTenants, type TenantDTO, updateTenant } from "@/lib/adminPortalClient";
+import DataSourceBadge from "@/components/DataSourceBadge";
+import { allowMockFallback } from "@/lib/runtimeFlags";
 
 type AccountStatus = "pending" | "approved" | "rejected";
 type AccountType = "SP" | "Fleet";
 
 interface Account {
-  id: number;
+  id: string;
   company: string;
   type: AccountType;
   email: string;
@@ -38,6 +41,7 @@ const initialAccounts: Account[] = [
 
 const Accounts = () => {
   const { t } = useLanguage();
+  const allowFallback = allowMockFallback();
 
   const statusStyles: Record<AccountStatus, { dot: string; bg: string; text: string; label: string }> = {
     pending: { dot: "bg-warning", bg: "bg-warning/10", text: "text-warning", label: t("status.pending") },
@@ -50,13 +54,16 @@ const Accounts = () => {
     Fleet: "bg-info/10 text-info",
   };
 
-  const [accounts, setAccounts] = useState<Account[]>(initialAccounts);
+  const [accounts, setAccounts] = useState<Account[]>(
+    allowFallback ? initialAccounts.map((a) => ({ ...a, id: String(a.id) })) : [],
+  );
+  const [apiBacked, setApiBacked] = useState(false);
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const [formOpen, setFormOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
@@ -70,8 +77,48 @@ const Accounts = () => {
     return matchSearch && matchType && matchStatus;
   });
 
+  useEffect(() => {
+    const mapTenant = (t: TenantDTO): Account => {
+      const rawType = (t.tenant_type || t.type || "").toLowerCase();
+      const type: AccountType = rawType.includes("fleet") ? "Fleet" : "SP";
+      const rawStatus = (t.status || "").toLowerCase();
+      const status: AccountStatus =
+        rawStatus.includes("approved") || rawStatus.includes("active")
+          ? "approved"
+          : rawStatus.includes("rejected") || rawStatus.includes("suspend")
+            ? "rejected"
+            : "pending";
+      const submittedAt = t.submitted_at || t.created_at;
+      return {
+        id: String(t.id),
+        company: t.company_name || t.company || "N/A",
+        type,
+        email: t.owner_email || t.email || "N/A",
+        phone: t.phone || "N/A",
+        regNumber: t.registration_number || t.reg_number || "N/A",
+        submitted: submittedAt ? new Date(submittedAt).toLocaleDateString("fr-FR") : "N/A",
+        status,
+      };
+    };
+
+    const load = async () => {
+      try {
+        const items = await listTenants();
+        if (items.length > 0) {
+          setAccounts(items.map(mapTenant));
+          setApiBacked(true);
+        }
+      } catch {
+        setApiBacked(false);
+        if (!allowFallback) setAccounts([]);
+      }
+    };
+
+    void load();
+  }, [allowFallback]);
+
   const openDrawer = (account: Account) => { setSelectedAccount(account); setDrawerOpen(true); };
-  const toggleRow = (id: number) => { setSelectedRows((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; }); };
+  const toggleRow = (id: string) => { setSelectedRows((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; }); };
   const countByStatus = (s: AccountStatus) => accounts.filter((a) => a.status === s).length;
 
   const openCreate = () => { setEditingAccount(null); setForm({ company: "", type: "SP", email: "", phone: "", regNumber: "" }); setFormOpen(true); };
@@ -80,10 +127,32 @@ const Accounts = () => {
   const handleSave = () => {
     if (!form.company || !form.email) { toast({ title: t("accounts.required_fields"), description: t("accounts.required_fields_desc"), variant: "destructive" }); return; }
     if (editingAccount) {
+      if (apiBacked) {
+        void updateTenant(editingAccount.id, {
+          company_name: form.company,
+          tenant_type: form.type === "Fleet" ? "fleet_manager" : "service_provider",
+          email: form.email,
+          phone: form.phone,
+          registration_number: form.regNumber,
+        }).catch((e) => {
+          toast({ title: t("accounts.update_error"), description: String(e?.message || "API error"), variant: "destructive" });
+        });
+      }
       setAccounts((prev) => prev.map((a) => a.id === editingAccount.id ? { ...a, ...form } : a));
       toast({ title: t("accounts.updated"), description: `${form.company} ${t("accounts.updated_desc")}` });
     } else {
-      const newAccount: Account = { id: Date.now(), ...form, regNumber: form.regNumber || `FR-${form.type === "SP" ? "SP" : "FM"}-${Date.now()}`, submitted: new Date().toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" }), status: "pending" };
+      if (apiBacked) {
+        void createAccount({
+          company_name: form.company,
+          tenant_type: form.type === "Fleet" ? "fleet_manager" : "service_provider",
+          email: form.email,
+          phone: form.phone,
+          registration_number: form.regNumber || null,
+        }).catch((e) => {
+          toast({ title: t("accounts.create_error"), description: String(e?.message || "API error"), variant: "destructive" });
+        });
+      }
+      const newAccount: Account = { id: String(Date.now()), ...form, regNumber: form.regNumber || `FR-${form.type === "SP" ? "SP" : "FM"}-${Date.now()}`, submitted: new Date().toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" }), status: "pending" };
       setAccounts((prev) => [newAccount, ...prev]);
       toast({ title: t("accounts.created"), description: `${form.company} ${t("accounts.created_desc")}` });
     }
@@ -92,17 +161,32 @@ const Accounts = () => {
 
   const handleDelete = () => {
     if (!deleteTarget) return;
+    if (apiBacked) {
+      void deleteTenant(deleteTarget.id).catch((e) => {
+        toast({ title: t("accounts.delete_error"), description: String(e?.message || "API error"), variant: "destructive" });
+      });
+    }
     setAccounts((prev) => prev.filter((a) => a.id !== deleteTarget.id));
     toast({ title: t("accounts.deleted"), description: `${deleteTarget.company} ${t("accounts.deleted_desc")}` });
     setDeleteTarget(null); setDrawerOpen(false);
   };
 
-  const handleApprove = (id: number) => {
+  const handleApprove = (id: string) => {
+    if (apiBacked) {
+      void updateTenant(id, { status: "approved" }).catch((e) => {
+        toast({ title: t("accounts.update_error"), description: String(e?.message || "API error"), variant: "destructive" });
+      });
+    }
     setAccounts((prev) => prev.map((a) => a.id === id ? { ...a, status: "approved" as AccountStatus } : a));
     toast({ title: t("accounts.approved_toast"), description: t("accounts.approved_toast_desc") });
   };
 
-  const handleReject = (id: number) => {
+  const handleReject = (id: string) => {
+    if (apiBacked) {
+      void updateTenant(id, { status: "rejected" }).catch((e) => {
+        toast({ title: t("accounts.update_error"), description: String(e?.message || "API error"), variant: "destructive" });
+      });
+    }
     setAccounts((prev) => prev.map((a) => a.id === id ? { ...a, status: "rejected" as AccountStatus } : a));
     toast({ title: t("accounts.rejected_toast"), description: t("accounts.rejected_toast_desc") });
   };
@@ -112,7 +196,10 @@ const Accounts = () => {
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground tracking-tight">{t("accounts.title")}</h1>
-          <p className="text-muted-foreground mt-1">{t("accounts.subtitle")}</p>
+          <p className="text-muted-foreground mt-1 flex items-center gap-2">
+            <span>{t("accounts.subtitle")}</span>
+            <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
+          </p>
         </div>
         <button onClick={openCreate} className="h-10 px-4 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2 w-fit">
           <UserPlus className="h-4 w-4" /> {t("accounts.new")}

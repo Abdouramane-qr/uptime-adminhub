@@ -24,7 +24,7 @@ const Profile = () => {
   const handleSave = async () => {
     if (!user) return;
     setSaving(true);
-    const { error } = await supabase.from("profiles").update({ full_name: fullName }).eq("user_id", user.id);
+    const { error } = await supabase.from("profiles").update({ full_name: fullName }).eq("id", user.id);
     setSaving(false);
     if (error) { toast.error(t("profile.update_error")); } else { setEditing(false); toast.success(t("profile.update_success")); window.location.reload(); }
   };
@@ -38,7 +38,7 @@ const Profile = () => {
     const { error: uploadError } = await supabase.storage.from("avatars").upload(filePath, file, { upsert: true });
     if (uploadError) { setUploading(false); toast.error(t("profile.upload_error")); return; }
     const { data: urlData } = supabase.storage.from("avatars").getPublicUrl(filePath);
-    const { error: updateError } = await supabase.from("profiles").update({ avatar_url: urlData.publicUrl }).eq("user_id", user.id);
+    const { error: updateError } = await supabase.from("profiles").update({ avatar_url: urlData.publicUrl }).eq("id", user.id);
     setUploading(false);
     if (updateError) { toast.error(t("profile.avatar_error")); } else { toast.success(t("profile.avatar_updated")); window.location.reload(); }
   };

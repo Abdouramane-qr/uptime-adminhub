@@ -10,8 +10,13 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:backend-client": "vitest run src/lib/adminPortalClient.test.ts",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "qa:strict-backend": "./scripts/check_strict_backend_mode.sh",
+    "build:strict-backend": "VITE_ALLOW_MOCK_FALLBACK=false vite build",
+    "qa:strict-backend:full": "npm run qa:strict-backend && npm run build:strict-backend",
+    "qa:backend-link:full": "npm run test:backend-client && npm run qa:strict-backend && npm run build:strict-backend"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

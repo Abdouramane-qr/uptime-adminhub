@@ -287,3 +287,22 @@ Open [Lovable](https://lovable.dev) → Share → Publish.
 ## 📄 License
 
 Private project.
+
+## Migration runtime flags
+
+- `VITE_ALLOW_MOCK_FALLBACK` (default: `true`)
+  - `true`: backend data when available, mock fallback if backend unavailable
+  - `false`: strict backend mode, no mock seeding on migrated pages
+
+### QA strict backend
+Utiliser la checklist: `QA_STRICT_BACKEND_CHECKLIST.md`
+
+### Strict backend commands
+```bash
+npm run qa:strict-backend
+npm run build:strict-backend
+npm run qa:strict-backend:full
+```
+
+### Sprint 2 backend contracts
+See: `BACKEND_CONTRACTS_SPRINT2_BILLING_TECH_AUDIT.md`
