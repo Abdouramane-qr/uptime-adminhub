@@ -30,12 +30,20 @@ export async function callAdminPortal<T = unknown>(
   path: string,
   opts: { method?: HttpMethod; body?: unknown } = {},
 ): Promise<T> {
+  return callSupabaseFunction<T>("admin-portal", path, opts);
+}
+
+export async function callSupabaseFunction<T = unknown>(
+  functionName: string,
+  path: string,
+  opts: { method?: HttpMethod; body?: unknown } = {},
+): Promise<T> {
   const method = opts.method ?? "GET";
   const token = await getAccessToken();
   const baseUrl = String(import.meta.env.VITE_SUPABASE_URL || "").replace(/\/$/, "");
   const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-  const endpoint = `${baseUrl}/functions/v1/admin-portal${path.startsWith("/") ? path : `/${path}`}`;
+  const endpoint = `${baseUrl}/functions/v1/${functionName}${path.startsWith("/") ? path : `/${path}`}`;
 
   const headers: Record<string, string> = {
     apikey: anonKey,
@@ -167,6 +175,22 @@ export interface DashboardCountsDTO {
   alerts?: number;
 }
 
+export interface TeamMemberDTO {
+  id?: string;
+  full_name?: string;
+  email?: string;
+  role?: string;
+  created_at?: string;
+}
+
+export interface OnboardingItemDTO {
+  id: string;
+  status?: string;
+  account_type?: string;
+  company_name?: string;
+  created_at?: string;
+}
+
 export async function listTenants(): Promise<TenantDTO[]> {
   const payload = await callAdminPortal<{ items?: TenantDTO[]; tenants?: TenantDTO[] }>("/tenants");
   return payload.items || payload.tenants || [];
@@ -182,6 +206,21 @@ export async function updateTenant(id: string, body: Record<string, unknown>): P
 
 export async function deleteTenant(id: string): Promise<unknown> {
   return callAdminPortal(`/tenants/${id}`, { method: "DELETE" });
+}
+
+export async function resetTenantOwnerPassword(id: string, newPassword: string): Promise<unknown> {
+  return callAdminPortal(`/tenants/${id}/owner-password`, { method: "PATCH", body: { newPassword } });
+}
+
+export async function listTeamMembers(tenantId: string): Promise<TeamMemberDTO[]> {
+  const payload = await callAdminPortal<{ items?: TeamMemberDTO[]; members?: TeamMemberDTO[] }>(
+    `/tenants/${tenantId}/members`,
+  );
+  return payload.items || payload.members || [];
+}
+
+export async function addTeamMember(tenantId: string, body: { fullName: string; email: string }): Promise<unknown> {
+  return callAdminPortal(`/tenants/${tenantId}/members`, { method: "POST", body });
 }
 
 export async function listServiceRequests(): Promise<ServiceRequestDTO[]> {
@@ -234,4 +273,38 @@ export async function listAuditLogs(): Promise<AuditLogDTO[]> {
 export async function getDashboardCounts(): Promise<DashboardCountsDTO> {
   const payload = await callAdminPortal<{ counts?: DashboardCountsDTO; items?: DashboardCountsDTO }>("/dashboard");
   return payload.counts || payload.items || {};
+}
+
+export async function listOnboardingQueue(params?: {
+  status?: string;
+  accountType?: string;
+  q?: string;
+}): Promise<OnboardingItemDTO[]> {
+  const qp = new URLSearchParams();
+  if (params?.status) qp.set("status", params.status);
+  if (params?.accountType) qp.set("accountType", params.accountType);
+  if (params?.q) qp.set("q", params.q);
+  const path = qp.toString() ? `/onboarding?${qp.toString()}` : "/onboarding";
+  const payload = await callSupabaseFunction<{ items?: OnboardingItemDTO[] }>("onboarding-crud", path);
+  return payload.items || [];
+}
+
+export async function getOnboardingDetail(onboardingId: string): Promise<Record<string, unknown>> {
+  return callSupabaseFunction("onboarding-crud", `/onboarding/${onboardingId}`);
+}
+
+export async function onboardingAction(
+  onboardingId: string,
+  action: "approve" | "reject" | "submit",
+  body?: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return callSupabaseFunction("onboarding-crud", `/onboarding/${onboardingId}/${action}`, { method: "POST", body });
+}
+
+export async function onboardingCreateResource(
+  onboardingId: string,
+  resource: string,
+  body?: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return callSupabaseFunction("onboarding-crud", `/onboarding/${onboardingId}/${resource}`, { method: "POST", body });
 }

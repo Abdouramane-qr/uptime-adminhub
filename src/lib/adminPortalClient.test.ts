@@ -5,6 +5,7 @@ import {
   createServiceRequest,
   deleteTenant,
   getDashboardCounts,
+  listOnboardingQueue,
   listAuditLogs,
   listBillingInvoices,
   listProviderPresence,
@@ -261,5 +262,22 @@ describe("adminPortalClient", () => {
     const out = await getDashboardCounts();
     expect(out.providers).toBe(9);
     expect(out.jobsLive).toBe(3);
+  });
+
+  it("routes onboarding queue to onboarding-crud function", async () => {
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: "token-onboarding" } } });
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ items: [{ id: "onb-1" }] }),
+    } as Response);
+
+    const out = await listOnboardingQueue({ status: "pending", q: "fleet" });
+    expect(out[0].id).toBe("onb-1");
+
+    const [url] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/functions/v1/onboarding-crud/onboarding?");
+    expect(url).toContain("status=pending");
+    expect(url).toContain("q=fleet");
   });
 });
