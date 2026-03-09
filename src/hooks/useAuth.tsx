@@ -52,6 +52,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
 
     try {
+      // Primary admin gate: DB role helper (supports migrated role model).
+      const { data: isAdminByRole } = await supabase.rpc("is_admin");
+      if (isAdminByRole === true) {
+        setIsAdmin(true);
+        return;
+      }
+
+      // Compatibility gate: legacy edge-function dashboard check.
       const baseUrl = import.meta.env.VITE_SUPABASE_URL;
       const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
       const endpoint = `${String(baseUrl).replace(/\/$/, "")}/functions/v1/admin-portal/dashboard`;
@@ -128,7 +136,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const normalizedEmail = email.trim().toLowerCase();
+    const { error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password });
     if (error) throw error;
   };
 

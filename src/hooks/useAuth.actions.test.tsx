@@ -8,12 +8,14 @@ const {
   signInWithPasswordMock,
   signOutMock,
   fetchMock,
+  rpcMock,
 } = vi.hoisted(() => {
   const getSessionMock = vi.fn();
   const onAuthStateChangeMock = vi.fn();
   const signInWithPasswordMock = vi.fn();
   const signOutMock = vi.fn();
   const fetchMock = vi.fn();
+  const rpcMock = vi.fn();
 
   return {
     getSessionMock,
@@ -21,6 +23,7 @@ const {
     signInWithPasswordMock,
     signOutMock,
     fetchMock,
+    rpcMock,
   };
 });
 
@@ -32,6 +35,7 @@ vi.mock('@/integrations/supabase/client', () => ({
       signInWithPassword: signInWithPasswordMock,
       signOut: signOutMock,
     },
+    rpc: rpcMock,
     from: vi.fn(() => ({
       select: vi.fn(() => ({
         eq: vi.fn(() => ({
@@ -61,6 +65,7 @@ describe('useAuth actions', () => {
     signInWithPasswordMock.mockReset();
     signOutMock.mockReset();
     fetchMock.mockReset();
+    rpcMock.mockReset();
 
     vi.stubGlobal('fetch', fetchMock);
 
@@ -77,6 +82,7 @@ describe('useAuth actions', () => {
         session: null,
       },
     });
+    rpcMock.mockResolvedValue({ data: false });
   });
 
   it('delegates signIn to Supabase auth client', async () => {

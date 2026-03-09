@@ -44,7 +44,14 @@ const Login = () => {
       await signIn(email, password);
       navigate("/dashboard");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Login failed";
+      const raw = error instanceof Error ? error.message : "Login failed";
+      const lower = raw.toLowerCase();
+      const message =
+        lower.includes("email not confirmed")
+          ? "Email non confirmé. Vérifie ta boîte mail (spam inclus) ou demande un renvoi de confirmation."
+          : lower.includes("invalid login credentials")
+            ? "Identifiants invalides. Vérifie email/mot de passe, puis utilise \"Mot de passe oublié\" si besoin."
+            : raw;
       toast.error(message);
     } finally {
       setLoading(false);
@@ -54,8 +61,9 @@ const Login = () => {
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    const normalizedEmail = email.trim().toLowerCase();
     const { error } = await supabase.auth.signUp({
-      email,
+      email: normalizedEmail,
       password,
       options: {
         data: { full_name: fullName },
@@ -74,7 +82,8 @@ const Login = () => {
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    const normalizedEmail = email.trim().toLowerCase();
+    const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
       redirectTo: `${window.location.origin}/reset-password`,
     });
     setLoading(false);

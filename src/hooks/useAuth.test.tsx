@@ -10,6 +10,7 @@ const {
   fromSingleMock,
   fromEqMock,
   fromSelectMock,
+  rpcMock,
   fetchMock,
   authStateHandlerRef,
 } = vi.hoisted(() => {
@@ -21,6 +22,7 @@ const {
   const fromSingleMock = vi.fn();
   const fromEqMock = vi.fn(() => ({ single: fromSingleMock }));
   const fromSelectMock = vi.fn(() => ({ eq: fromEqMock }));
+  const rpcMock = vi.fn();
 
   const fetchMock = vi.fn();
   const authStateHandlerRef: { current: ((event: string, session: any) => void | Promise<void>) | null } = { current: null };
@@ -33,6 +35,7 @@ const {
     fromSingleMock,
     fromEqMock,
     fromSelectMock,
+    rpcMock,
     fetchMock,
     authStateHandlerRef,
   };
@@ -46,6 +49,7 @@ vi.mock('@/integrations/supabase/client', () => ({
       signInWithPassword: signInWithPasswordMock,
       signOut: signOutMock,
     },
+    rpc: rpcMock,
     from: vi.fn(() => ({
       select: fromSelectMock,
     })),
@@ -73,6 +77,7 @@ describe('useAuth integration', () => {
     fromSingleMock.mockReset();
     fromEqMock.mockClear();
     fromSelectMock.mockClear();
+    rpcMock.mockReset();
     fetchMock.mockReset();
     authStateHandlerRef.current = null;
 
@@ -97,9 +102,38 @@ describe('useAuth integration', () => {
         role: 'admin',
       },
     });
+    rpcMock.mockResolvedValue({ data: false });
   });
 
-  it('marks authenticated admin when admin-portal dashboard returns 200', async () => {
+  it('marks authenticated admin when rpc is_admin returns true', async () => {
+    getSessionMock.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'token-rpc-admin',
+          user: { id: 'user-1' },
+        },
+      },
+    });
+
+    rpcMock.mockResolvedValue({ data: true });
+
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('loading').textContent).toBe('false');
+      expect(screen.getByTestId('admin-loading').textContent).toBe('false');
+      expect(screen.getByTestId('user').textContent).toBe('user-1');
+      expect(screen.getByTestId('is-admin').textContent).toBe('true');
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('marks authenticated admin when rpc is false but admin-portal dashboard returns 200', async () => {
     getSessionMock.mockResolvedValue({
       data: {
         session: {
