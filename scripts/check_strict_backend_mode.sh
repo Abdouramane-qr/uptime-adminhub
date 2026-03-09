@@ -41,7 +41,7 @@ for f in "${TARGETS[@]}"; do
     continue
   fi
 
-  if ! rg -n "if \(!allowFallback\) set[A-Za-z]+\((\[\]|\\{\\})\);" "$f" >/dev/null; then
+  if ! rg -n -U "if \(!allowFallback\)(\s*set[A-Za-z]+\((\[\]|\\{\\})\);|\s*\{[^}]*set[A-Za-z]+\((\[\]|\\{\\})\);)" "$f" >/dev/null; then
     echo "[WARN] $f: no explicit strict-mode clear in catch block"
   else
     echo "[OK]   $f"
