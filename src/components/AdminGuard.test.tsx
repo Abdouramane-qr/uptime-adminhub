@@ -5,9 +5,13 @@ import type { ReactNode } from 'react';
 import AdminGuard from './AdminGuard';
 
 const mockUseAuth = vi.fn();
+const mockUseRole = vi.fn();
 
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => mockUseAuth(),
+}));
+vi.mock('@/hooks/useRole', () => ({
+  useRole: () => mockUseRole(),
 }));
 
 const renderWithRouter = (ui: ReactNode) =>
@@ -20,10 +24,12 @@ const renderWithRouter = (ui: ReactNode) =>
 describe('AdminGuard', () => {
   beforeEach(() => {
     mockUseAuth.mockReset();
+    mockUseRole.mockReset();
   });
 
   it('shows spinner while loading', () => {
-    mockUseAuth.mockReturnValue({ user: null, loading: true, adminLoading: true, isAdmin: false });
+    mockUseAuth.mockReturnValue({ user: null, loading: true });
+    mockUseRole.mockReturnValue({ roles: [], loading: true });
 
     const { container } = renderWithRouter(
       <AdminGuard>
@@ -35,7 +41,8 @@ describe('AdminGuard', () => {
   });
 
   it('redirects to login when no user', () => {
-    mockUseAuth.mockReturnValue({ user: null, loading: false, adminLoading: false, isAdmin: false });
+    mockUseAuth.mockReturnValue({ user: null, loading: false });
+    mockUseRole.mockReturnValue({ roles: [], loading: false });
 
     renderWithRouter(
       <AdminGuard>
@@ -46,8 +53,9 @@ describe('AdminGuard', () => {
     expect(screen.queryByText('Admin Content')).not.toBeInTheDocument();
   });
 
-  it('shows access required panel when user is not admin', () => {
-    mockUseAuth.mockReturnValue({ user: { id: 'u1' }, loading: false, adminLoading: false, isAdmin: false });
+  it('redirects to pending-access when user has no assigned role', () => {
+    mockUseAuth.mockReturnValue({ user: { id: 'u1' }, loading: false });
+    mockUseRole.mockReturnValue({ roles: [], loading: false });
 
     renderWithRouter(
       <AdminGuard>
@@ -55,12 +63,12 @@ describe('AdminGuard', () => {
       </AdminGuard>,
     );
 
-    expect(screen.getByText('Admin access required')).toBeInTheDocument();
     expect(screen.queryByText('Admin Content')).not.toBeInTheDocument();
   });
 
-  it('renders children when user is admin', () => {
-    mockUseAuth.mockReturnValue({ user: { id: 'u1' }, loading: false, adminLoading: false, isAdmin: true });
+  it('renders children when user has at least one role', () => {
+    mockUseAuth.mockReturnValue({ user: { id: 'u1' }, loading: false });
+    mockUseRole.mockReturnValue({ roles: ['moderator'], loading: false });
 
     renderWithRouter(
       <AdminGuard>

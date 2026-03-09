@@ -35,6 +35,7 @@ import SpOnboarding from "./pages/sp/SpOnboarding";
 import SpSettings from "./pages/sp/SpSettings";
 import Profile from "./pages/Profile";
 import AdminRoles from "./pages/AdminRoles";
+import PendingAccess from "./pages/PendingAccess";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -60,6 +61,7 @@ const App = () => (
               <Routes>
                 <Route path="/login" element={<Login />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
+                <Route path="/pending-access" element={<ProtectedRoute><PendingAccess /></ProtectedRoute>} />
                 <Route path="/" element={<ProtectedRoute><AdminGuard><AppLayout /></AdminGuard></ProtectedRoute>}>
                   <Route index element={<Navigate to="/dashboard" replace />} />
                   <Route path="dashboard" element={<Dashboard />} />
