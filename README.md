@@ -306,3 +306,4 @@ npm run qa:strict-backend:full
 
 ### Sprint 2 backend contracts
 See: `BACKEND_CONTRACTS_SPRINT2_BILLING_TECH_AUDIT.md`
+# uptime-adminhub
