@@ -4,6 +4,7 @@ import {
   createAccount,
   createServiceRequest,
   deleteTenant,
+  getDashboardCounts,
   listAuditLogs,
   listBillingInvoices,
   listProviderPresence,
@@ -247,5 +248,18 @@ describe("adminPortalClient", () => {
     expect(postInit.method).toBe("POST");
     expect(postHeaders["Content-Type"]).toBe("application/json");
     expect(postInit.body).toBe(JSON.stringify({ company_name: "ACME" }));
+  });
+
+  it("reads dashboard counts wrapper", async () => {
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: "token-dashboard" } } });
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ counts: { providers: 9, jobsLive: 3 } }),
+    } as Response);
+
+    const out = await getDashboardCounts();
+    expect(out.providers).toBe(9);
+    expect(out.jobsLive).toBe(3);
   });
 });

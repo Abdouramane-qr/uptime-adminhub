@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Search, Building2, Truck, Eye, Mail, Phone, MapPin, TrendingUp, Activity, Plus, Pencil, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -10,25 +10,22 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { useLanguage } from "@/hooks/useLanguage";
+import { listServiceRequests, listTenants, type ServiceRequestDTO, type TenantDTO } from "@/lib/adminPortalClient";
+import DataSourceBadge from "@/components/DataSourceBadge";
+import { allowMockFallback } from "@/lib/runtimeFlags";
+import { reportFallbackHit } from "@/lib/fallbackTelemetry";
 
 interface FleetManager {
-  id: number; company: string; contact: string; email: string; phone: string; city: string;
+  id: string | number; company: string; contact: string; email: string; phone: string; city: string;
   vehicles: number; activeInterventions: number; totalInterventions: number; status: string;
   joined: string; fleetTypes: string[]; avgMonthly: number;
 }
 
-const initialFleetManagers: FleetManager[] = [
-  { id: 1, company: "TransEurope Logistics", contact: "Alain Mercier", email: "alain@transeurope.fr", phone: "+33 1 55 66 77 88", city: "Paris", vehicles: 48, activeInterventions: 3, totalInterventions: 67, status: "active", joined: "Sep 2024", fleetTypes: ["Camions", "Utilitaires"], avgMonthly: 8 },
-  { id: 2, company: "MediFrais Express", contact: "Claire Fontaine", email: "claire@medifrais.fr", phone: "+33 4 91 33 44 55", city: "Marseille", vehicles: 32, activeInterventions: 1, totalInterventions: 42, status: "active", joined: "Déc 2024", fleetTypes: ["Camions frigo", "Utilitaires"], avgMonthly: 5 },
-  { id: 3, company: "Urbancolis", contact: "Mehdi Khelifi", email: "mehdi@urbancolis.fr", phone: "+33 4 72 55 66 77", city: "Lyon", vehicles: 85, activeInterventions: 5, totalInterventions: 134, status: "active", joined: "Jul 2024", fleetTypes: ["Utilitaires", "Électriques"], avgMonthly: 14 },
-  { id: 4, company: "BTP Roulage Sud", contact: "François Garnier", email: "fgarnier@btproulage.fr", phone: "+33 5 61 22 33 44", city: "Toulouse", vehicles: 22, activeInterventions: 0, totalInterventions: 18, status: "active", joined: "Jan 2025", fleetTypes: ["Engins lourds", "Camions"], avgMonthly: 3 },
-  { id: 5, company: "GreenMove", contact: "Emma Leroy", email: "emma@greenmove.fr", phone: "+33 2 40 11 22 33", city: "Nantes", vehicles: 120, activeInterventions: 7, totalInterventions: 203, status: "active", joined: "Avr 2024", fleetTypes: ["Électriques", "Scooters", "Utilitaires"], avgMonthly: 22 },
-  { id: 6, company: "AgroTransit", contact: "Pascal Duval", email: "pascal@agrotransit.fr", phone: "+33 3 88 44 55 66", city: "Strasbourg", vehicles: 15, activeInterventions: 0, totalInterventions: 9, status: "inactive", joined: "Oct 2025", fleetTypes: ["Camions"], avgMonthly: 1 },
-];
-
 const FleetManagers = () => {
   const { t } = useLanguage();
-  const [managers, setManagers] = useState<FleetManager[]>(initialFleetManagers);
+  const allowFallback = allowMockFallback();
+  const [managers, setManagers] = useState<FleetManager[]>([]);
+  const [apiBacked, setApiBacked] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [selected, setSelected] = useState<FleetManager | null>(null);
@@ -36,6 +33,62 @@ const FleetManagers = () => {
   const [editing, setEditing] = useState<FleetManager | null>(null);
   const [form, setForm] = useState({ company: "", contact: "", email: "", phone: "", city: "", vehicles: "0" });
   const [deleteTarget, setDeleteTarget] = useState<FleetManager | null>(null);
+
+  useEffect(() => {
+    const norm = (v: string | undefined) => String(v || "").trim().toLowerCase();
+    const isFleet = (tnt: TenantDTO) => {
+      const k = norm(tnt.tenant_type || tnt.type);
+      return k.includes("fleet");
+    };
+    const isActiveStatus = (s: string | undefined) => {
+      const k = norm(s);
+      return !["completed", "cancelled"].includes(k);
+    };
+
+    const load = async () => {
+      try {
+        const [tenants, requests] = await Promise.all([listTenants(), listServiceRequests()]);
+        const agg = new Map<string, { active: number; total: number }>();
+        requests.forEach((r: ServiceRequestDTO) => {
+          const key = norm(r.fleet_manager || r.client_name || r.client);
+          if (!key) return;
+          if (!agg.has(key)) agg.set(key, { active: 0, total: 0 });
+          const bucket = agg.get(key)!;
+          bucket.total += 1;
+          if (isActiveStatus(r.status)) bucket.active += 1;
+        });
+
+        const mapped: FleetManager[] = tenants.filter(isFleet).map((tnt) => {
+          const company = tnt.company_name || tnt.company || "Fleet";
+          const stats = agg.get(norm(company)) || { active: 0, total: 0 };
+          return {
+            id: String(tnt.id),
+            company,
+            contact: tnt.owner_email || "N/A",
+            email: tnt.email || tnt.owner_email || "N/A",
+            phone: tnt.phone || "N/A",
+            city: "N/A",
+            vehicles: 0,
+            activeInterventions: stats.active,
+            totalInterventions: stats.total,
+            status: String(tnt.status || "").toLowerCase().includes("active") ? "active" : "inactive",
+            joined: tnt.created_at ? new Date(tnt.created_at).toLocaleDateString("fr-FR") : "N/A",
+            fleetTypes: ["N/A"],
+            avgMonthly: 0,
+          };
+        });
+
+        setManagers(mapped);
+        setApiBacked(true);
+      } catch {
+        setApiBacked(false);
+        reportFallbackHit("FleetManagers");
+        if (!allowFallback) setManagers([]);
+      }
+    };
+
+    void load();
+  }, [allowFallback]);
 
   const filtered = managers.filter((f) => {
     const matchSearch = f.company.toLowerCase().includes(search.toLowerCase()) || f.contact.toLowerCase().includes(search.toLowerCase());
@@ -76,7 +129,10 @@ const FleetManagers = () => {
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground tracking-tight">{t("fleet.title")}</h1>
-          <p className="text-muted-foreground mt-1">{managers.length} {t("fleet.registered")}</p>
+          <p className="text-muted-foreground mt-1 flex items-center gap-2">
+            <span>{managers.length} {t("fleet.registered")}</span>
+            <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative">

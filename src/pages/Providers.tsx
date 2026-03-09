@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Search, Star, MapPin, Phone, Mail, Eye, Shield, Wrench, Truck, Zap, KeyRound, TrendingUp, Clock, Plus, Pencil, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -10,28 +10,25 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { useLanguage } from "@/hooks/useLanguage";
+import { listServiceRequests, listTenants, type ServiceRequestDTO, type TenantDTO } from "@/lib/adminPortalClient";
+import DataSourceBadge from "@/components/DataSourceBadge";
+import { allowMockFallback } from "@/lib/runtimeFlags";
+import { reportFallbackHit } from "@/lib/fallbackTelemetry";
 
 interface Provider {
-  id: number; name: string; contact: string; email: string; phone: string; city: string; radius: number;
+  id: string | number; name: string; contact: string; email: string; phone: string; city: string; radius: number;
   rating: number; reviews: number; technicians: number; completedJobs: number; activeJobs: number;
   services: string[]; status: string; joined: string; responseTime: string;
 }
-
-const initialProviders: Provider[] = [
-  { id: 1, name: "AutoFix Pro", contact: "Marc Dupont", email: "contact@autofixpro.fr", phone: "+33 1 42 68 53 00", city: "Paris", radius: 45, rating: 4.8, reviews: 124, technicians: 6, completedJobs: 312, activeJobs: 4, services: ["Dépannage", "Remorquage", "Pneu", "Électrique"], status: "approved", joined: "Jan 2025", responseTime: "18 min" },
-  { id: 2, name: "RoadAssist 24/7", contact: "Sophie Martin", email: "info@roadassist247.fr", phone: "+33 4 91 22 33 44", city: "Marseille", radius: 60, rating: 4.6, reviews: 89, technicians: 4, completedJobs: 198, activeJobs: 2, services: ["Dépannage", "Remorquage", "Serrurerie"], status: "approved", joined: "Mar 2025", responseTime: "22 min" },
-  { id: 3, name: "LyonDépannage", contact: "Pierre Blanc", email: "contact@lyondepannage.fr", phone: "+33 4 78 11 22 33", city: "Lyon", radius: 35, rating: 4.9, reviews: 156, technicians: 8, completedJobs: 445, activeJobs: 5, services: ["Dépannage", "Remorquage", "Pneu", "Électrique", "Serrurerie"], status: "approved", joined: "Nov 2024", responseTime: "14 min" },
-  { id: 4, name: "Quick Tow Bordeaux", contact: "Jean Moreau", email: "ops@quicktow.fr", phone: "+33 5 56 44 55 66", city: "Bordeaux", radius: 40, rating: 4.3, reviews: 52, technicians: 3, completedJobs: 87, activeJobs: 1, services: ["Remorquage", "Pneu"], status: "approved", joined: "Juin 2025", responseTime: "28 min" },
-  { id: 5, name: "ElectrAuto Nice", contact: "Camille Rossi", email: "info@electrauto.fr", phone: "+33 4 93 77 88 99", city: "Nice", radius: 30, rating: 4.7, reviews: 71, technicians: 3, completedJobs: 134, activeJobs: 3, services: ["Électrique", "Dépannage"], status: "approved", joined: "Août 2025", responseTime: "20 min" },
-  { id: 6, name: "NordAssistance", contact: "Lucie Petit", email: "contact@nordassistance.fr", phone: "+33 3 20 11 22 33", city: "Lille", radius: 55, rating: 4.1, reviews: 38, technicians: 2, completedJobs: 56, activeJobs: 0, services: ["Dépannage", "Remorquage", "Serrurerie"], status: "pending", joined: "Fév 2026", responseTime: "32 min" },
-];
 
 const serviceIcons: Record<string, typeof Wrench> = { Dépannage: Wrench, Remorquage: Truck, Pneu: Shield, Électrique: Zap, Serrurerie: KeyRound };
 const allServices = ["Dépannage", "Remorquage", "Pneu", "Électrique", "Serrurerie"];
 
 const Providers = () => {
   const { t } = useLanguage();
-  const [providers, setProviders] = useState<Provider[]>(initialProviders);
+  const allowFallback = allowMockFallback();
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [apiBacked, setApiBacked] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [selected, setSelected] = useState<Provider | null>(null);
@@ -39,6 +36,68 @@ const Providers = () => {
   const [editing, setEditing] = useState<Provider | null>(null);
   const [form, setForm] = useState({ name: "", contact: "", email: "", phone: "", city: "", radius: "30", services: [] as string[] });
   const [deleteTarget, setDeleteTarget] = useState<Provider | null>(null);
+
+  useEffect(() => {
+    const norm = (v: string | undefined) => String(v || "").trim().toLowerCase();
+    const isProviderTenant = (tnt: TenantDTO) => {
+      const k = norm(tnt.tenant_type || tnt.type);
+      return k.includes("service") || k === "sp" || k.includes("provider");
+    };
+    const isCompleted = (s: string | undefined) => {
+      const k = norm(s);
+      return k === "completed" || k === "cancelled";
+    };
+
+    const load = async () => {
+      try {
+        const [tenants, requests] = await Promise.all([listTenants(), listServiceRequests()]);
+        const agg = new Map<string, { completed: number; active: number; services: Set<string> }>();
+
+        requests.forEach((r: ServiceRequestDTO) => {
+          const key = norm(r.provider_name || r.assigned_provider);
+          if (!key) return;
+          if (!agg.has(key)) agg.set(key, { completed: 0, active: 0, services: new Set<string>() });
+          const bucket = agg.get(key)!;
+          if (r.service_type || r.type) bucket.services.add(String(r.service_type || r.type));
+          if (isCompleted(r.status)) bucket.completed += 1;
+          else bucket.active += 1;
+        });
+
+        const mapped: Provider[] = tenants.filter(isProviderTenant).map((tnt) => {
+          const name = tnt.company_name || tnt.company || "Provider";
+          const key = norm(name);
+          const stats = agg.get(key) || { completed: 0, active: 0, services: new Set<string>() };
+          return {
+            id: String(tnt.id),
+            name,
+            contact: tnt.owner_email || "N/A",
+            email: tnt.email || tnt.owner_email || "N/A",
+            phone: tnt.phone || "N/A",
+            city: "N/A",
+            radius: 0,
+            rating: 0,
+            reviews: 0,
+            technicians: 0,
+            completedJobs: stats.completed,
+            activeJobs: stats.active,
+            services: Array.from(stats.services),
+            status: String(tnt.status || "pending").toLowerCase().includes("approved") ? "approved" : "pending",
+            joined: tnt.created_at ? new Date(tnt.created_at).toLocaleDateString("fr-FR") : "N/A",
+            responseTime: "N/A",
+          };
+        });
+
+        setProviders(mapped);
+        setApiBacked(true);
+      } catch {
+        setApiBacked(false);
+        reportFallbackHit("Providers");
+        if (!allowFallback) setProviders([]);
+      }
+    };
+
+    void load();
+  }, [allowFallback]);
 
   const filtered = providers.filter((p) => {
     const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) || p.city.toLowerCase().includes(search.toLowerCase());
@@ -84,7 +143,10 @@ const Providers = () => {
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground tracking-tight">{t("providers.title")}</h1>
-          <p className="text-muted-foreground mt-1">{providers.length} {t("providers.registered")}</p>
+          <p className="text-muted-foreground mt-1 flex items-center gap-2">
+            <span>{providers.length} {t("providers.registered")}</span>
+            <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative">

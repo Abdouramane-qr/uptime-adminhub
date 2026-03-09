@@ -160,6 +160,13 @@ export interface AuditLogDTO {
   target?: string;
 }
 
+export interface DashboardCountsDTO {
+  providers?: number;
+  jobsLive?: number;
+  customers?: number;
+  alerts?: number;
+}
+
 export async function listTenants(): Promise<TenantDTO[]> {
   const payload = await callAdminPortal<{ items?: TenantDTO[]; tenants?: TenantDTO[] }>("/tenants");
   return payload.items || payload.tenants || [];
@@ -222,4 +229,9 @@ export async function listTechnicians(): Promise<TechnicianDTO[]> {
 export async function listAuditLogs(): Promise<AuditLogDTO[]> {
   const payload = await callAdminPortal<{ items?: AuditLogDTO[]; logs?: AuditLogDTO[] }>("/audit-logs");
   return payload.items || payload.logs || [];
+}
+
+export async function getDashboardCounts(): Promise<DashboardCountsDTO> {
+  const payload = await callAdminPortal<{ counts?: DashboardCountsDTO; items?: DashboardCountsDTO }>("/dashboard");
+  return payload.counts || payload.items || {};
 }
