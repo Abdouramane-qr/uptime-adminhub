@@ -12,12 +12,23 @@ TARGETS=(
   "src/pages/Billing.tsx"
   "src/pages/Technicians.tsx"
   "src/pages/AuditLogs.tsx"
+  "src/pages/Providers.tsx"
+  "src/pages/FleetManagers.tsx"
+  "src/pages/Dashboard.tsx"
+  "src/pages/Analytics.tsx"
 )
 
 DEDICATED_TARGETS=(
   "src/pages/Billing.tsx"
   "src/pages/Technicians.tsx"
   "src/pages/AuditLogs.tsx"
+)
+
+BACKEND_FIRST_TARGETS=(
+  "src/pages/Providers.tsx"
+  "src/pages/FleetManagers.tsx"
+  "src/pages/Dashboard.tsx"
+  "src/pages/Analytics.tsx"
 )
 
 echo "[strict-backend] Checking migrated pages for strict-mode guards..."
@@ -30,7 +41,7 @@ for f in "${TARGETS[@]}"; do
     continue
   fi
 
-  if ! rg -n "if \(!allowFallback\) set[A-Za-z]+\(\[\]\);" "$f" >/dev/null; then
+  if ! rg -n "if \(!allowFallback\) set[A-Za-z]+\((\[\]|\\{\\})\);" "$f" >/dev/null; then
     echo "[WARN] $f: no explicit strict-mode clear in catch block"
   else
     echo "[OK]   $f"
@@ -44,6 +55,16 @@ for f in "${DEDICATED_TARGETS[@]}"; do
     missing=$((missing + 1))
   else
     echo "[OK]   $f (dedicated endpoints only)"
+  fi
+done
+
+echo "[strict-backend] Checking backend-first pages for static dataset regressions..."
+for f in "${BACKEND_FIRST_TARGETS[@]}"; do
+  if rg -n "const initial|const mock|Math\\.random\\(" "$f" >/dev/null; then
+    echo "[FAIL] $f: static dataset pattern found"
+    missing=$((missing + 1))
+  else
+    echo "[OK]   $f (backend-first)"
   fi
 done
 
