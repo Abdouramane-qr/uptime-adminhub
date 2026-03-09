@@ -10,7 +10,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { useLanguage } from "@/hooks/useLanguage";
-import { listServiceRequests, listTenants, type ServiceRequestDTO, type TenantDTO } from "@/lib/adminPortalClient";
+import {
+  createAccount,
+  deleteTenant,
+  listServiceRequests,
+  listTenants,
+  type ServiceRequestDTO,
+  type TenantDTO,
+  updateTenant,
+} from "@/lib/adminPortalClient";
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
 import { reportFallbackHit } from "@/lib/fallbackTelemetry";
@@ -109,20 +117,47 @@ const Providers = () => {
   const openEdit = (p: Provider) => { setEditing(p); setForm({ name: p.name, contact: p.contact, email: p.email, phone: p.phone, city: p.city, radius: String(p.radius), services: [...p.services] }); setFormOpen(true); };
   const toggleService = (s: string) => { setForm(f => ({ ...f, services: f.services.includes(s) ? f.services.filter(x => x !== s) : [...f.services, s] })); };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.name || !form.email) { toast({ title: t("providers.required_fields"), description: t("providers.required_fields_desc"), variant: "destructive" }); return; }
     if (editing) {
+      if (apiBacked) {
+        await updateTenant(String(editing.id), {
+          company_name: form.name,
+          tenant_type: "service_provider",
+          email: form.email,
+          phone: form.phone,
+          status: form.services.length > 0 ? "approved" : "pending",
+        }).catch(() => {
+          toast({ title: t("providers.update_error"), description: "Backend update failed", variant: "destructive" });
+        });
+      }
       setProviders(prev => prev.map(p => p.id === editing.id ? { ...p, name: form.name, contact: form.contact, email: form.email, phone: form.phone, city: form.city, radius: Number(form.radius), services: form.services } : p));
       toast({ title: t("providers.updated"), description: `${form.name} ${t("providers.updated_desc")}` });
     } else {
+      if (apiBacked) {
+        await createAccount({
+          company_name: form.name,
+          tenant_type: "service_provider",
+          email: form.email,
+          phone: form.phone,
+          registration_number: null,
+        }).catch(() => {
+          toast({ title: t("providers.create_error"), description: "Backend create failed", variant: "destructive" });
+        });
+      }
       setProviders(prev => [{ id: Date.now(), ...form, radius: Number(form.radius), rating: 0, reviews: 0, technicians: 0, completedJobs: 0, activeJobs: 0, status: "pending", joined: "Mar 2026", responseTime: "N/A" }, ...prev]);
       toast({ title: t("providers.created"), description: `${form.name} ${t("providers.created_desc")}` });
     }
     setFormOpen(false);
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!deleteTarget) return;
+    if (apiBacked) {
+      await deleteTenant(String(deleteTarget.id)).catch(() => {
+        toast({ title: t("providers.delete_error"), description: "Backend delete failed", variant: "destructive" });
+      });
+    }
     setProviders(prev => prev.filter(p => p.id !== deleteTarget.id));
     toast({ title: t("providers.deleted"), description: `${deleteTarget.name} ${t("providers.deleted_desc")}` });
     setDeleteTarget(null); setSelected(null);

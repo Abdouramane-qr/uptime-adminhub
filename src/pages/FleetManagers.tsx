@@ -10,7 +10,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { useLanguage } from "@/hooks/useLanguage";
-import { listServiceRequests, listTenants, type ServiceRequestDTO, type TenantDTO } from "@/lib/adminPortalClient";
+import {
+  createAccount,
+  deleteTenant,
+  listServiceRequests,
+  listTenants,
+  type ServiceRequestDTO,
+  type TenantDTO,
+  updateTenant,
+} from "@/lib/adminPortalClient";
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
 import { reportFallbackHit } from "@/lib/fallbackTelemetry";
@@ -105,20 +113,47 @@ const FleetManagers = () => {
   const openCreate = () => { setEditing(null); setForm({ company: "", contact: "", email: "", phone: "", city: "", vehicles: "0" }); setFormOpen(true); };
   const openEdit = (f: FleetManager) => { setEditing(f); setForm({ company: f.company, contact: f.contact, email: f.email, phone: f.phone, city: f.city, vehicles: String(f.vehicles) }); setFormOpen(true); };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.company || !form.email) { toast({ title: t("fleet.required_fields"), description: t("fleet.required_fields_desc"), variant: "destructive" }); return; }
     if (editing) {
+      if (apiBacked) {
+        await updateTenant(String(editing.id), {
+          company_name: form.company,
+          tenant_type: "fleet_manager",
+          email: form.email,
+          phone: form.phone,
+          status: "active",
+        }).catch(() => {
+          toast({ title: t("fleet.update_error"), description: "Backend update failed", variant: "destructive" });
+        });
+      }
       setManagers(prev => prev.map(m => m.id === editing.id ? { ...m, company: form.company, contact: form.contact, email: form.email, phone: form.phone, city: form.city, vehicles: Number(form.vehicles) } : m));
       toast({ title: t("fleet.updated"), description: `${form.company} ${t("fleet.updated_desc")}` });
     } else {
+      if (apiBacked) {
+        await createAccount({
+          company_name: form.company,
+          tenant_type: "fleet_manager",
+          email: form.email,
+          phone: form.phone,
+          registration_number: null,
+        }).catch(() => {
+          toast({ title: t("fleet.create_error"), description: "Backend create failed", variant: "destructive" });
+        });
+      }
       setManagers(prev => [{ id: Date.now(), ...form, vehicles: Number(form.vehicles), activeInterventions: 0, totalInterventions: 0, status: "active", joined: "Mar 2026", fleetTypes: ["Utilitaires"], avgMonthly: 0 }, ...prev]);
       toast({ title: t("fleet.created"), description: `${form.company} ${t("fleet.created_desc")}` });
     }
     setFormOpen(false);
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!deleteTarget) return;
+    if (apiBacked) {
+      await deleteTenant(String(deleteTarget.id)).catch(() => {
+        toast({ title: t("fleet.delete_error"), description: "Backend delete failed", variant: "destructive" });
+      });
+    }
     setManagers(prev => prev.filter(m => m.id !== deleteTarget.id));
     toast({ title: t("fleet.deleted"), description: `${deleteTarget.company} ${t("fleet.deleted_desc")}` });
     setDeleteTarget(null); setSelected(null);
