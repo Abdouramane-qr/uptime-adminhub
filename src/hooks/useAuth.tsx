@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
+import { clearCachedSession, setCachedSession } from "@/lib/authSession";
 
 interface Profile {
   id: string;
@@ -36,6 +37,43 @@ const AuthContext = createContext<AuthContextType>({
 
 export const useAuth = () => useContext(AuthContext);
 
+function isJwtLikeToken(token: string | null | undefined): token is string {
+  return typeof token === "string" && token.split(".").length === 3;
+}
+
+async function waitForPersistedSession(attempts = 10, delayMs = 120): Promise<Session | null> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (session?.access_token) {
+      return session;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  return null;
+}
+
+async function validateSession(activeSession: Session | null): Promise<Session | null> {
+  if (!activeSession?.access_token || !isJwtLikeToken(activeSession.access_token)) {
+    clearCachedSession();
+    return null;
+  }
+
+  const { data, error } = await supabase.auth.getUser(activeSession.access_token);
+  if (error || !data.user) {
+    await supabase.auth.signOut();
+    clearCachedSession();
+    return null;
+  }
+
+  setCachedSession(activeSession);
+  return activeSession;
+}
+
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -61,7 +99,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
       // Compatibility gate: legacy edge-function dashboard check.
       const baseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
       const endpoint = `${String(baseUrl).replace(/\/$/, "")}/functions/v1/admin-portal/dashboard`;
       const res = await fetch(endpoint, {
         headers: {
@@ -83,23 +121,31 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const fetchProfile = async (userId: string) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("profiles")
       .select("id, full_name, phone, company_code, tenant_id, role")
       .eq("id", userId)
-      .single();
+      .maybeSingle();
+
+    if (error) {
+      console.error("Error fetching profile:", error);
+      setProfile(null);
+      return;
+    }
+
     setProfile(data);
   };
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
+        const validSession = await validateSession(session);
+        setSession(validSession);
+        setUser(validSession?.user ?? null);
         setAdminLoading(true);
-        if (session?.user) {
-          setTimeout(() => fetchProfile(session.user.id), 0);
-          setTimeout(() => verifyAdminAccess(session), 0);
+        if (validSession?.user) {
+          setTimeout(() => fetchProfile(validSession.user.id), 0);
+          setTimeout(() => verifyAdminAccess(validSession), 0);
         } else {
           setProfile(null);
           setIsAdmin(false);
@@ -109,13 +155,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
     );
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      const validSession = await validateSession(session);
+      setSession(validSession);
+      setUser(validSession?.user ?? null);
       setAdminLoading(true);
-      if (session?.user) {
-        fetchProfile(session.user.id);
-        verifyAdminAccess(session);
+      if (validSession?.user) {
+        fetchProfile(validSession.user.id);
+        verifyAdminAccess(validSession);
       } else {
         setIsAdmin(false);
         setAdminLoading(false);
@@ -128,6 +175,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const signOut = async () => {
     await supabase.auth.signOut();
+    clearCachedSession();
     setUser(null);
     setSession(null);
     setProfile(null);
@@ -137,8 +185,27 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const signIn = async (email: string, password: string) => {
     const normalizedEmail = email.trim().toLowerCase();
-    const { error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password });
     if (error) throw error;
+
+    const activeSession = data.session ?? (await waitForPersistedSession());
+
+    if (!activeSession?.user || !isJwtLikeToken(activeSession.access_token)) {
+      await supabase.auth.signOut();
+      clearCachedSession();
+      throw new Error("Session Supabase invalide apres connexion. Reessayez.");
+    }
+
+    const { data: verifiedUser, error: verifyError } = await supabase.auth.getUser(activeSession.access_token);
+    if (verifyError || !verifiedUser.user) {
+      await supabase.auth.signOut();
+      clearCachedSession();
+      throw new Error("Jeton Supabase invalide apres connexion. Reessayez.");
+    }
+
+    setCachedSession(activeSession);
+    setSession(activeSession);
+    setUser(activeSession.user);
   };
 
   return (

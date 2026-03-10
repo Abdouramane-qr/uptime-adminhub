@@ -30,6 +30,7 @@ import {
   type ServiceRequestDTO,
   updateServiceRequestStatus,
 } from "@/lib/adminPortalClient";
+import { supabase } from "@/integrations/supabase/client";
 
 type InterventionStatus = "pending" | "assigned" | "en_route" | "arrived" | "in_progress" | "completed";
 
@@ -80,7 +81,7 @@ const Dispatch = () => {
     critical: { label: t("dispatch.urgency_critical"), bg: "bg-destructive/10", text: "text-destructive" },
   };
 
-  const [interventions, setInterventions] = useState(allowFallback ? initialInterventions : []);
+  const [interventions, setInterventions] = useState<DispatchIntervention[]>(allowFallback ? initialInterventions : []);
   const [apiBacked, setApiBacked] = useState(false);
   const [providers, setProviders] = useState<ProviderPosition[]>(allowFallback ? mockProviders : []);
   const [search, setSearch] = useState("");
@@ -90,7 +91,14 @@ const Dispatch = () => {
   const [assignProvider, setAssignProvider] = useState("");
   const [selectedMapProvider, setSelectedMapProvider] = useState<ProviderPosition | null>(null);
 
-  useEffect(() => {
+  const loadInterventions = async () => {
+    const extractDetail = (details: string | undefined, label: string) => {
+      if (!details) return null;
+      const part = details.split("|").map((item) => item.trim()).find((item) => item.toLowerCase().startsWith(`${label.toLowerCase()}:`));
+      if (!part) return null;
+      return part.slice(label.length + 1).trim() || null;
+    };
+
     const toNum = (v: unknown, fallback: number) => {
       const n = Number(v);
       return Number.isFinite(n) ? n : fallback;
@@ -99,48 +107,42 @@ const Dispatch = () => {
     const mapStatus = (v: string | undefined): InterventionStatus => {
       const s = String(v || "").toLowerCase();
       if (s === "pending" || s === "assigned" || s === "en_route" || s === "arrived" || s === "in_progress" || s === "completed") {
-        return s;
+        return s as InterventionStatus;
       }
       return "pending";
     };
 
     const mapItem = (r: ServiceRequestDTO): DispatchIntervention => ({
       id: r.id,
-      client: r.client_name || r.client || r.fleet_manager || "Client",
-      location: r.location || r.address || "Location inconnue",
+      client: r.customer_tenant_name || r.client_name || r.customer_name || r.client || r.fleet_manager || "Client",
+      location: r.location || r.address || extractDetail(r.breakdown_details, "Location") || "Location inconnue",
       lat: toNum(r.pickup_lat ?? r.lat, 48.8566),
       lng: toNum(r.pickup_lng ?? r.lng, 2.3522),
       type: r.service_type || r.type || "Assistance",
       status: mapStatus(r.status),
       createdAt: new Date(r.created_at || Date.now()),
-      assignedProvider: r.assigned_provider || r.provider_name || undefined,
+      assignedProvider: r.assigned_provider_name || r.provider_name || r.assigned_provider || undefined,
       urgency: (["normal", "high", "critical"].includes(String(r.urgency || "").toLowerCase())
         ? String(r.urgency).toLowerCase()
         : "normal") as "normal" | "high" | "critical",
     });
 
-    const load = async () => {
-      try {
-        const rows = await listServiceRequests();
-        if (rows.length > 0) {
-          setInterventions(rows.map(mapItem));
-          setApiBacked(true);
-        }
-      } catch {
-        setApiBacked(false);
-        reportFallbackHit("Dispatch:interventions");
-        if (!allowFallback) setInterventions([]);
-      }
-    };
+    try {
+      const rows = await listServiceRequests();
+      setInterventions(rows.map(mapItem));
+      setApiBacked(true);
+    } catch {
+      setApiBacked(false);
+      reportFallbackHit("Dispatch:interventions");
+      if (!allowFallback) setInterventions([]);
+    }
+  };
 
-    void load();
-  }, [allowFallback]);
-
-  useEffect(() => {
+  const loadProviders = async () => {
     const mapStatus = (row: ProviderPresenceDTO): MissionStatus => {
       const s = String(row.status || "").toLowerCase();
       if (s === "pending" || s === "assigned" || s === "en_route" || s === "arrived" || s === "in_progress" || s === "completed") {
-        return s;
+        return s as MissionStatus;
       }
       return row.is_available ? "pending" : "in_progress";
     };
@@ -156,21 +158,42 @@ const Dispatch = () => {
       completedMissions: 0,
     });
 
-    const loadProviders = async () => {
-      try {
-        const rows = await listProviderPresence();
-        if (rows.length > 0) {
-          setProviders(rows.map(mapProvider));
-        }
-      } catch {
-        // Keep mock fallback for non-configured environments.
-        reportFallbackHit("Dispatch:providers");
-        if (!allowFallback) setProviders([]);
-      }
-    };
+    try {
+      const rows = await listProviderPresence();
+      setProviders(rows.map(mapProvider));
+    } catch {
+      reportFallbackHit("Dispatch:providers");
+      if (!allowFallback) setProviders([]);
+    }
+  };
 
-    void loadProviders();
+  useEffect(() => {
+    loadInterventions();
+    loadProviders();
   }, [allowFallback]);
+
+  useEffect(() => {
+    if (!apiBacked) return;
+
+    const srChannel = supabase
+      .channel('dispatch_service_requests')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'service_requests' }, () => {
+        loadInterventions();
+      })
+      .subscribe();
+
+    const ppChannel = supabase
+      .channel('dispatch_provider_presence')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'provider_presence' }, () => {
+        loadProviders();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(srChannel);
+      supabase.removeChannel(ppChannel);
+    };
+  }, [apiBacked]);
 
   const availableProviders = useMemo(
     () => providers.filter((p) => p.status === "pending" || p.status === "completed"),
@@ -190,37 +213,45 @@ const Dispatch = () => {
   const pendingCount = interventions.filter(i => i.status === "pending").length;
   const activeCount = interventions.filter(i => ["en_route", "arrived", "in_progress"].includes(i.status)).length;
 
-  const handleAssign = () => {
+  const handleAssign = async () => {
     if (!selectedIntervention || !assignProvider) return;
-    if (apiBacked) {
-      void updateServiceRequestStatus(selectedIntervention.id, {
-        status: "assigned",
-        assigned_provider: assignProvider,
-      }).catch(() => {
-        toast({ title: t("dispatch.update_error"), description: t("dispatch.update_error_desc"), variant: "destructive" });
-      });
+    const selectedProvider = providers.find((provider) => provider.id === assignProvider);
+    const assignedProviderName = selectedProvider?.name || assignProvider;
+    try {
+      if (apiBacked) {
+        await updateServiceRequestStatus(selectedIntervention.id, {
+          status: "assigned",
+          assigned_provider_id: assignProvider,
+        });
+      }
+      setInterventions(prev => prev.map(i =>
+        i.id === selectedIntervention.id
+          ? { ...i, status: "assigned" as const, assignedProvider: assignedProviderName }
+          : i
+      ));
+      toast({ title: t("dispatch.mission_assigned"), description: `${selectedIntervention.id} → ${assignedProviderName}` });
+      setAssignOpen(false);
+      setAssignProvider("");
+      setSelectedIntervention(null);
+    } catch {
+      toast({ title: t("dispatch.update_error"), description: t("dispatch.update_error_desc"), variant: "destructive" });
     }
-    setInterventions(prev => prev.map(i =>
-      i.id === selectedIntervention.id ? { ...i, status: "assigned" as const, assignedProvider: assignProvider } : i
-    ));
-    toast({ title: t("dispatch.mission_assigned"), description: `${selectedIntervention.id} → ${assignProvider}` });
-    setAssignOpen(false);
-    setAssignProvider("");
-    setSelectedIntervention(null);
   };
 
-  const advanceStatus = (intervention: DispatchIntervention) => {
+  const advanceStatus = async (intervention: DispatchIntervention) => {
     const flow: InterventionStatus[] = ["pending", "assigned", "en_route", "arrived", "in_progress", "completed"];
     const idx = flow.indexOf(intervention.status);
     if (idx < 0 || idx >= flow.length - 1) return;
     const next = flow[idx + 1];
-    if (apiBacked) {
-      void updateServiceRequestStatus(intervention.id, { status: next }).catch(() => {
-        toast({ title: t("dispatch.update_error"), description: t("dispatch.update_error_desc"), variant: "destructive" });
-      });
+    try {
+      if (apiBacked) {
+        await updateServiceRequestStatus(intervention.id, { status: next });
+      }
+      setInterventions(prev => prev.map(i => i.id === intervention.id ? { ...i, status: next } : i));
+      toast({ title: t("dispatch.status_updated"), description: `${intervention.id} → ${statusConfig[next].label}` });
+    } catch {
+      toast({ title: t("dispatch.update_error"), description: t("dispatch.update_error_desc"), variant: "destructive" });
     }
-    setInterventions(prev => prev.map(i => i.id === intervention.id ? { ...i, status: next } : i));
-    toast({ title: t("dispatch.status_updated"), description: `${intervention.id} → ${statusConfig[next].label}` });
   };
 
   return (
@@ -371,7 +402,7 @@ const Dispatch = () => {
                   <SelectTrigger className="rounded-xl"><SelectValue placeholder={t("dispatch.select_provider")} /></SelectTrigger>
                   <SelectContent>
                     {availableProviders.map(p => (
-                      <SelectItem key={p.id} value={p.name}>
+                      <SelectItem key={p.id} value={p.id}>
                         <div className="flex items-center gap-2">
                           <div className="h-2 w-2 rounded-full" style={{ background: STATUS_CONFIG[p.status].color }} />
                           {p.name} — {STATUS_CONFIG[p.status].label}

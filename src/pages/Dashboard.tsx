@@ -13,6 +13,8 @@ import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
 import { reportFallbackHit } from "@/lib/fallbackTelemetry";
 
+import { supabase } from "@/integrations/supabase/client";
+
 type KPI = { label: string; value: string; icon: React.ElementType };
 
 const Dashboard = () => {
@@ -22,34 +24,53 @@ const Dashboard = () => {
   const [counts, setCounts] = useState<DashboardCountsDTO>({});
   const [serviceRequests, setServiceRequests] = useState<ServiceRequestDTO[]>([]);
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const [dashboard, requests, tenants] = await Promise.all([
-          getDashboardCounts(),
-          listServiceRequests(),
-          listTenants(),
-        ]);
-        setCounts({
-          providers: dashboard.providers ?? tenants.filter((tnt) => String(tnt.tenant_type || tnt.type || "").includes("service")).length,
-          jobsLive: dashboard.jobsLive ?? requests.filter((r) => !["completed", "cancelled"].includes(String(r.status || "").toLowerCase())).length,
-          customers: dashboard.customers ?? tenants.filter((tnt) => String(tnt.tenant_type || tnt.type || "").includes("fleet")).length,
-          alerts: dashboard.alerts ?? requests.filter((r) => String(r.status || "").toLowerCase() === "pending").length,
-        });
-        setServiceRequests(requests);
-        setApiBacked(true);
-      } catch {
-        setApiBacked(false);
-        reportFallbackHit("Dashboard");
-        if (!allowFallback) {
-          setCounts({});
-          setServiceRequests([]);
-        }
+  const loadDashboardData = async () => {
+    try {
+      const [dashboard, requests, tenants] = await Promise.all([
+        getDashboardCounts(),
+        listServiceRequests(),
+        listTenants(),
+      ]);
+      setCounts({
+        providers: dashboard.providers ?? tenants.filter((tnt) => String(tnt.tenant_type || tnt.type || "").includes("service")).length,
+        jobsLive: dashboard.jobsLive ?? requests.filter((r) => !["completed", "cancelled"].includes(String(r.status || "").toLowerCase())).length,
+        customers: dashboard.customers ?? tenants.filter((tnt) => String(tnt.tenant_type || tnt.type || "").includes("fleet")).length,
+        alerts: dashboard.alerts ?? requests.filter((r) => String(r.status || "").toLowerCase() === "pending").length,
+      });
+      setServiceRequests(requests);
+      setApiBacked(true);
+    } catch (e) {
+      console.error("Dashboard load error:", e);
+      setApiBacked(false);
+      reportFallbackHit("Dashboard");
+      if (!allowFallback) {
+        setCounts({});
+        setServiceRequests([]);
       }
-    };
+    }
+  };
 
-    void load();
+  useEffect(() => {
+    loadDashboardData();
   }, [allowFallback]);
+
+  useEffect(() => {
+    if (!apiBacked) return;
+
+    const channel = supabase
+      .channel('dashboard_updates')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'service_requests' }, () => {
+        loadDashboardData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tenants' }, () => {
+        loadDashboardData();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [apiBacked]);
 
   const kpis: KPI[] = [
     { label: t("dashboard.total_accounts"), value: String((counts.providers || 0) + (counts.customers || 0)), icon: Users },

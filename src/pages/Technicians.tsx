@@ -45,35 +45,36 @@ const Technicians = () => {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<TechStatus | "all">("all");
   const [selected, setSelected] = useState<Technician | null>(null);
-  const [technicians, setTechnicians] = useState<Technician[]>(allowFallback ? mockTechnicians : []);
+  const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [apiBacked, setApiBacked] = useState(false);
 
   useEffect(() => {
     const load = async () => {
       try {
         const techniciansRows = await listTechnicians();
-        if (techniciansRows.length > 0) {
-          const mapped = techniciansRows.map((row: TechnicianDTO, idx): Technician => ({
-            id: row.id || `T${String(idx + 1).padStart(3, "0")}`,
-            name: row.name || `Technicien ${idx + 1}`,
-            provider: row.provider || row.name || "Provider",
-            status: (row.status as TechStatus) || "offline",
-            phone: row.phone || "N/A",
-            location: row.location || "N/A",
-            completedInterventions: row.completed_interventions || 0,
-            rating: row.rating || 4.5,
-            specialties: row.specialties?.length ? row.specialties : ["Assistance routière"],
-            currentMission: row.current_mission,
-            joinedAt: row.joined_at || "N/A",
-          }));
-          setTechnicians(mapped);
-          setApiBacked(true);
-        }
+        const mapped = techniciansRows.map((row: TechnicianDTO, idx): Technician => ({
+          id: row.id || `T${String(idx + 1).padStart(3, "0")}`,
+          name: row.name || `Technicien ${idx + 1}`,
+          provider: row.provider || row.name || "Provider",
+          status: (row.status as TechStatus) || "offline",
+          phone: row.phone || "N/A",
+          location: row.location || "N/A",
+          completedInterventions: row.completed_interventions || 0,
+          rating: row.rating || 4.5,
+          specialties: row.specialties?.length ? row.specialties : ["Assistance routière"],
+          currentMission: row.current_mission,
+          joinedAt: row.joined_at || "N/A",
+        }));
+        setTechnicians(mapped);
+        setApiBacked(true);
       } catch {
-        // Keep mock fallback
         setApiBacked(false);
         reportFallbackHit("Technicians");
-        if (!allowFallback) setTechnicians([]);
+        if (!allowFallback) {
+          setTechnicians([]);
+        } else {
+          setTechnicians(mockTechnicians);
+        }
       }
     };
 

@@ -11,6 +11,7 @@ import { listProviderPresence, type ProviderPresenceDTO } from "@/lib/adminPorta
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
 import { reportFallbackHit } from "@/lib/fallbackTelemetry";
+import { supabase } from "@/integrations/supabase/client";
 
 const allStatuses: MissionStatus[] = ["pending", "assigned", "en_route", "arrived", "in_progress", "completed"];
 
@@ -21,11 +22,11 @@ const Map = () => {
   const [providers, setProviders] = useState<ProviderPosition[]>(allowFallback ? mockProviders : []);
   const [apiBacked, setApiBacked] = useState(false);
 
-  useEffect(() => {
+  const loadProviders = async () => {
     const mapStatus = (row: ProviderPresenceDTO): MissionStatus => {
       const s = String(row.status || "").toLowerCase();
       if (s === "pending" || s === "assigned" || s === "en_route" || s === "arrived" || s === "in_progress" || s === "completed") {
-        return s;
+        return s as MissionStatus;
       }
       return row.is_available ? "pending" : "in_progress";
     };
@@ -41,23 +42,35 @@ const Map = () => {
       completedMissions: 0,
     });
 
-    const load = async () => {
-      try {
-        const rows = await listProviderPresence();
-        if (rows.length > 0) {
-          setProviders(rows.map(mapProvider));
-          setApiBacked(true);
-        }
-      } catch {
-        // Keep mock fallback for non-configured envs.
-        setApiBacked(false);
-        reportFallbackHit("Map");
-        if (!allowFallback) setProviders([]);
-      }
-    };
+    try {
+      const rows = await listProviderPresence();
+      setProviders(rows.map(mapProvider));
+      setApiBacked(true);
+    } catch {
+      setApiBacked(false);
+      reportFallbackHit("Map");
+      if (!allowFallback) setProviders([]);
+    }
+  };
 
-    void load();
+  useEffect(() => {
+    loadProviders();
   }, [allowFallback]);
+
+  useEffect(() => {
+    if (!apiBacked) return;
+
+    const channel = supabase
+      .channel('map_provider_presence')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'provider_presence' }, () => {
+        loadProviders();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [apiBacked]);
 
   const toggleFilter = (status: MissionStatus) => {
     setActiveFilters((prev) => {

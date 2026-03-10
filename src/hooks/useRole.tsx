@@ -17,13 +17,34 @@ export const useRole = () => {
     }
 
     const fetchRoles = async () => {
-      const { data } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", user.id);
+      try {
+        // Fetch from user_roles table
+        const { data: userRoles } = await supabase
+          .from("user_roles")
+          .select("role")
+          .eq("user_id", user.id);
 
-      setRoles((data || []).map((r) => r.role as AppRole));
-      setLoading(false);
+        // Fetch from profiles table as fallback/complement
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (profileError) {
+          throw profileError;
+        }
+
+        const allRoles = new Set<AppRole>();
+        if (userRoles) userRoles.forEach(r => allRoles.add(r.role as AppRole));
+        if (profile?.role) allRoles.add(profile.role as AppRole);
+
+        setRoles(Array.from(allRoles));
+      } catch (e) {
+        console.error("Error fetching roles:", e);
+      } finally {
+        setLoading(false);
+      }
     };
 
     fetchRoles();

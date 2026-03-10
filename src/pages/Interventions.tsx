@@ -23,10 +23,23 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/hooks/useLanguage";
-import { createServiceRequest, listServiceRequests, type ServiceRequestDTO, updateServiceRequestStatus } from "@/lib/adminPortalClient";
+import {
+  createServiceRequest,
+  deleteServiceRequest,
+  listProviderPresence,
+  listServiceRequests,
+  listTenants,
+  type ProviderPresenceDTO,
+  type ServiceRequestDTO,
+  type TenantDTO,
+  updateServiceRequestStatus,
+} from "@/lib/adminPortalClient";
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
 import { reportFallbackHit } from "@/lib/fallbackTelemetry";
+import ChatPanel from "@/components/ChatPanel";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
 
 type InterventionStatus = "pending" | "assigned" | "en_route" | "arrived" | "in_progress" | "completed" | "cancelled";
 
@@ -50,6 +63,16 @@ interface Intervention {
   created: string;
   location: string;
   timeline: TimelineStep[];
+}
+
+interface TenantOption {
+  id: string;
+  name: string;
+}
+
+interface ProviderOption {
+  id: string;
+  name: string;
 }
 
 const fullTimeline = (status: InterventionStatus, dates: Record<string, string>, labels: Record<string, string>): TimelineStep[] => {
@@ -83,12 +106,62 @@ const fullTimeline = (status: InterventionStatus, dates: Record<string, string>,
 const now = () => format(new Date(), "d MMM, HH:mm");
 
 const serviceTypes = ["Remorquage", "Changement pneu", "Batterie", "Réparation moteur", "Livraison carburant", "Ouverture"];
-const fleetManagers = ["Metro Fleet Solutions", "GreenHaul Logistics", "CityDrive Fleet", "TransEurope Carriers"];
-const serviceProviders = ["AutoFix Pro Services", "QuickTow Emergency", "RoadStar Repairs", "TurboMech Garage"];
-const technicians = ["Jean Dupont", "Marie Laurent", "Pierre Martin", "Luc Bernard", "Sophie Moreau"];
+const fallbackFleetManagers: TenantOption[] = [
+  { id: "fleet-1", name: "Metro Fleet Solutions" },
+  { id: "fleet-2", name: "GreenHaul Logistics" },
+  { id: "fleet-3", name: "CityDrive Fleet" },
+  { id: "fleet-4", name: "TransEurope Carriers" },
+];
+const fallbackServiceProviders: ProviderOption[] = [
+  { id: "provider-1", name: "AutoFix Pro Services" },
+  { id: "provider-2", name: "QuickTow Emergency" },
+  { id: "provider-3", name: "RoadStar Repairs" },
+  { id: "provider-4", name: "TurboMech Garage" },
+];
+const fallbackTechnicians = ["Jean Dupont", "Marie Laurent", "Pierre Martin", "Luc Bernard", "Sophie Moreau"];
 
 const emptyForm = {
   fleetManager: "", serviceProvider: "", technician: "", vehiclePlate: "", vehicleModel: "", vehicleYear: "2024", serviceType: "", location: "",
+};
+
+const extractBreakdownDetail = (details: string | undefined, label: string) => {
+  if (!details) return null;
+  const part = details
+    .split("|")
+    .map((item) => item.trim())
+    .find((item) => item.toLowerCase().startsWith(`${label.toLowerCase()}:`));
+  if (!part) return null;
+  return part.slice(label.length + 1).trim() || null;
+};
+
+const parseVehicleDetails = (details: string | undefined) => {
+  const rawVehicle = extractBreakdownDetail(details, "Vehicle");
+  const rawVehicleYear = extractBreakdownDetail(details, "Vehicle year");
+  const rawTechnician = extractBreakdownDetail(details, "Technician");
+
+  const vehicleText = rawVehicle || "";
+  const segments = vehicleText.split(/\s+/).filter(Boolean);
+  const platePattern = /^[A-Z0-9-]{5,}$/i;
+  let plate = "N/A";
+
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    if (platePattern.test(segments[index])) {
+      plate = segments[index];
+      break;
+    }
+  }
+
+  const model = vehicleText && plate !== "N/A"
+    ? vehicleText.replace(plate, "").trim() || "N/A"
+    : vehicleText || "N/A";
+  const parsedYear = Number(rawVehicleYear || "");
+
+  return {
+    technician: rawTechnician || "Affectation technicien non raccordee",
+    vehiclePlate: plate,
+    vehicleModel: model,
+    vehicleYear: Number.isFinite(parsedYear) && parsedYear > 0 ? parsedYear : new Date().getFullYear(),
+  };
 };
 
 const Interventions = () => {
@@ -171,59 +244,94 @@ const Interventions = () => {
 
   const [data, setData] = useState<Intervention[]>(allowFallback ? makeInitial : []);
   const [apiBacked, setApiBacked] = useState(false);
+  const [fleetManagerOptions, setFleetManagerOptions] = useState<TenantOption[]>(allowFallback ? fallbackFleetManagers : []);
+  const [serviceProviderOptions, setServiceProviderOptions] = useState<ProviderOption[]>(allowFallback ? fallbackServiceProviders : []);
   const [search, setSearch] = useState("");
   const [activeFilters, setActiveFilters] = useState<Set<InterventionStatus>>(new Set());
   const [dateFrom, setDateFrom] = useState<Date>();
   const [dateTo, setDateTo] = useState<Date>();
   const [selectedIntervention, setSelectedIntervention] = useState<Intervention | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"details" | "chat">("details");
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Intervention | null>(null);
   const [form, setForm] = useState(emptyForm);
 
-  useEffect(() => {
-    const mapStatus = (v: string | undefined): InterventionStatus => {
-      const s = String(v || "").toLowerCase();
-      if (s === "pending" || s === "assigned" || s === "en_route" || s === "arrived" || s === "in_progress" || s === "completed" || s === "cancelled") {
-        return s;
-      }
-      return "pending";
-    };
-
-    const mapItem = (r: ServiceRequestDTO): Intervention => {
-      const status = mapStatus(r.status);
+  const mapServiceRequest = useMemo(
+    () => (r: ServiceRequestDTO): Intervention => {
+      const status = (() => {
+        const s = String(r.status || "").toLowerCase();
+        if (s === "pending" || s === "assigned" || s === "en_route" || s === "arrived" || s === "in_progress" || s === "completed" || s === "cancelled") {
+          return s as InterventionStatus;
+        }
+        return "pending";
+      })();
+      const details = parseVehicleDetails(r.breakdown_details);
       return {
         id: r.id,
-        fleetManager: r.fleet_manager || r.client_name || r.client || "N/A",
-        serviceProvider: r.provider_name || r.assigned_provider || "N/A",
-        technician: "N/A",
-        vehiclePlate: "N/A",
-        vehicleModel: "N/A",
-        vehicleYear: new Date().getFullYear(),
+        fleetManager: r.customer_tenant_name || r.client_name || r.customer_name || r.client || "N/A",
+        serviceProvider: r.assigned_provider_name || r.provider_name || r.assigned_provider || "N/A",
+        technician: details.technician,
+        vehiclePlate: details.vehiclePlate,
+        vehicleModel: details.vehicleModel,
+        vehicleYear: details.vehicleYear,
         serviceType: r.service_type || r.type || "Assistance",
         status,
         created: r.created_at ? format(new Date(r.created_at), "d MMM yyyy") : format(new Date(), "d MMM yyyy"),
-        location: r.location || r.address || "N/A",
+        location: r.location || r.address || extractBreakdownDetail(r.breakdown_details, "Location") || "N/A",
         timeline: fullTimeline(status, { created: r.created_at ? format(new Date(r.created_at), "d MMM, HH:mm") : now() }, statusLabels),
       };
+    },
+    [statusLabels],
+  );
+
+  useEffect(() => {
+    const isFleetTenant = (tenant: TenantDTO) => {
+      const type = String(tenant.tenant_type || tenant.type || "").toLowerCase();
+      return type.includes("fleet");
     };
+    const mapProviderOption = (row: ProviderPresenceDTO): ProviderOption => ({
+      id: String(row.provider_id || row.id || ""),
+      name: row.display_name || row.name || "Provider",
+    });
 
     const load = async () => {
       try {
-        const rows = await listServiceRequests();
-        if (rows.length > 0) {
-          setData(rows.map(mapItem));
-          setApiBacked(true);
-        }
-      } catch {
+        const [rows, tenants, providers] = await Promise.all([
+          listServiceRequests(),
+          listTenants(),
+          listProviderPresence(),
+        ]);
+
+        setData(rows.map(mapServiceRequest));
+        setFleetManagerOptions(
+          tenants
+            .filter(isFleetTenant)
+            .map((tenant) => ({
+              id: String(tenant.id),
+              name: tenant.company_name || tenant.company || "Fleet",
+            })),
+        );
+        setServiceProviderOptions(
+          providers
+            .map(mapProviderOption)
+            .filter((provider) => provider.id.trim().length > 0),
+        );
+        setApiBacked(true);
+      } catch (e) {
+        console.error("Failed to load interventions data:", e);
         setApiBacked(false);
         reportFallbackHit("Interventions");
-        if (!allowFallback) setData([]);
+        if (!allowFallback) {
+          setData([]);
+          setFleetManagerOptions([]);
+          setServiceProviderOptions([]);
+        }
       }
     };
 
     void load();
-  }, [allowFallback, statusLabels]);
+  }, [allowFallback, mapServiceRequest]);
 
   const toggleFilter = (status: InterventionStatus) => {
     setActiveFilters((prev) => {
@@ -247,85 +355,170 @@ const Interventions = () => {
 
   const openModal = (intervention: Intervention) => {
     setSelectedIntervention(intervention);
+    setActiveTab("details");
     setModalOpen(true);
   };
 
   const activeCount = data.filter(i => ["en_route", "arrived", "in_progress"].includes(i.status)).length;
   const completedCount = data.filter(i => i.status === "completed").length;
 
-  const handleCreate = () => {
-    if (!form.fleetManager || !form.serviceProvider || !form.technician || !form.serviceType || !form.vehiclePlate || !form.vehicleModel || !form.location) {
+  const parseLatLng = (raw: string) => {
+    const match = raw.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+    if (!match) return null;
+    return {
+      lat: Number(match[1]),
+      lng: Number(match[2]),
+    };
+  };
+
+  const handleCreate = async () => {
+    const technicianRequired = !(apiBacked || !allowFallback);
+    if (!form.fleetManager || !form.serviceProvider || (technicianRequired && !form.technician) || !form.serviceType || !form.vehiclePlate || !form.vehicleModel || !form.location) {
       toast({ title: t("interventions.required_fields"), description: t("interventions.fill_all"), variant: "destructive" });
       return;
     }
-    const nextId = `INT-2026-${String(data.length + 1).padStart(4, "0")}`;
-    const newIntervention: Intervention = {
-      id: nextId, fleetManager: form.fleetManager, serviceProvider: form.serviceProvider,
-      technician: form.technician, vehiclePlate: form.vehiclePlate, vehicleModel: form.vehicleModel,
-      vehicleYear: Number(form.vehicleYear), serviceType: form.serviceType, location: form.location,
-      status: "pending", created: format(new Date(), "d MMM yyyy"),
-      timeline: fullTimeline("pending", { created: now() }, statusLabels),
-    };
-    if (apiBacked) {
-      void createServiceRequest({
-        service_type: form.serviceType,
-        location: form.location,
-        breakdown_details: `${form.vehicleModel} ${form.vehiclePlate}`.trim(),
-        provider_name: form.serviceProvider,
-        fleet_manager: form.fleetManager,
-        status: "pending",
-      }).catch(() => {
-        toast({ title: t("interventions.create_error"), description: t("interventions.create_error_desc"), variant: "destructive" });
-      });
+    const selectedFleetManager = fleetManagerOptions.find((item) => item.id === form.fleetManager);
+    const selectedServiceProvider = serviceProviderOptions.find((item) => item.id === form.serviceProvider);
+    if (!selectedFleetManager || !selectedServiceProvider) {
+      toast({ title: t("interventions.required_fields"), description: t("interventions.fill_all"), variant: "destructive" });
+      return;
     }
-    setData([newIntervention, ...data]);
-    setCreateOpen(false);
-    setForm(emptyForm);
-    toast({ title: t("interventions.created_success"), description: `${nextId}` });
+
+    const parsedCoords = parseLatLng(form.location);
+    
+    try {
+      if (apiBacked || !allowFallback) {
+        const created = await createServiceRequest({
+          service_type: form.serviceType,
+          breakdown_details: [
+            `Vehicle: ${form.vehicleModel} ${form.vehiclePlate}`.trim(),
+            `Vehicle year: ${form.vehicleYear}`.trim(),
+            `Location: ${form.location}`,
+          ].join(" | "),
+          pickup_lat: parsedCoords?.lat ?? null,
+          pickup_lng: parsedCoords?.lng ?? null,
+          customer_tenant_id: selectedFleetManager.id,
+          assigned_provider_id: selectedServiceProvider.id,
+          status: "assigned",
+        }) as { item?: ServiceRequestDTO };
+
+        if (!created.item) {
+          throw new Error("service_request_create_missing_item");
+        }
+        
+        setData((prev) => [mapServiceRequest(created.item!), ...prev]);
+        toast({ title: t("interventions.created_success"), description: `${created.item.id}` });
+      } else {
+        // Pure mock mode
+        const nextId = `INT-2026-${String(data.length + 1).padStart(4, "0")}`;
+        const newIntervention: Intervention = {
+          id: nextId, fleetManager: selectedFleetManager.name, serviceProvider: selectedServiceProvider.name,
+          technician: form.technician, vehiclePlate: form.vehiclePlate, vehicleModel: form.vehicleModel,
+          vehicleYear: Number(form.vehicleYear), serviceType: form.serviceType, location: form.location,
+          status: "assigned", created: format(new Date(), "d MMM yyyy"),
+          timeline: fullTimeline("assigned", { created: now(), assigned: now() }, statusLabels),
+        };
+        setData([newIntervention, ...data]);
+        toast({ title: t("interventions.created_success"), description: `${nextId}` });
+      }
+      
+      setCreateOpen(false);
+      setForm(emptyForm);
+    } catch (e) {
+      console.error("Create intervention error:", e);
+      toast({ title: t("interventions.create_error"), description: t("interventions.create_error_desc"), variant: "destructive" });
+    }
   };
 
-  const advanceStatus = (intervention: Intervention) => {
+  const advanceStatus = async (intervention: Intervention) => {
     const idx = statusFlow.indexOf(intervention.status);
     if (idx < 0 || idx >= statusFlow.length - 1) return;
     const nextStatus = statusFlow[idx + 1];
-    const stepKeyMap: Record<string, string> = { pending: "created", assigned: "assigned", en_route: "en_route", arrived: "arrived", in_progress: "in_progress", completed: "completed" };
-    const dates: Record<string, string> = {};
-    statusFlow.forEach((s, i) => {
-      if (i <= idx + 1) dates[stepKeyMap[s]] = i <= idx ? (intervention.timeline[i]?.date || now()) : now();
-    });
-    const updated: Intervention = { ...intervention, status: nextStatus, timeline: fullTimeline(nextStatus, dates, statusLabels) };
-    if (apiBacked) {
-      void updateServiceRequestStatus(intervention.id, { status: nextStatus }).catch(() => {
-        toast({ title: t("interventions.update_error"), description: t("interventions.update_error_desc"), variant: "destructive" });
-      });
+    
+    try {
+      if (apiBacked || !allowFallback) {
+        const res = await updateServiceRequestStatus(intervention.id, { status: nextStatus }) as { item?: ServiceRequestDTO };
+        const updated = res?.item ? mapServiceRequest(res.item) : null;
+        
+        if (updated) {
+          setData(data.map(d => d.id === intervention.id ? updated : d));
+          setSelectedIntervention(updated);
+        } else {
+          // Fallback if API ok but no item returned
+          const stepKeyMap: Record<string, string> = { pending: "created", assigned: "assigned", en_route: "en_route", arrived: "arrived", in_progress: "in_progress", completed: "completed" };
+          const dates: Record<string, string> = {};
+          statusFlow.forEach((s, i) => {
+            if (i <= idx + 1) dates[stepKeyMap[s]] = i <= idx ? (intervention.timeline[i]?.date || now()) : now();
+          });
+          const localUpdated: Intervention = { ...intervention, status: nextStatus, timeline: fullTimeline(nextStatus, dates, statusLabels) };
+          setData(data.map(d => d.id === intervention.id ? localUpdated : d));
+          setSelectedIntervention(localUpdated);
+        }
+      } else {
+        // Pure mock mode
+        const stepKeyMap: Record<string, string> = { pending: "created", assigned: "assigned", en_route: "en_route", arrived: "arrived", in_progress: "in_progress", completed: "completed" };
+        const dates: Record<string, string> = {};
+        statusFlow.forEach((s, i) => {
+          if (i <= idx + 1) dates[stepKeyMap[s]] = i <= idx ? (intervention.timeline[i]?.date || now()) : now();
+        });
+        const updated: Intervention = { ...intervention, status: nextStatus, timeline: fullTimeline(nextStatus, dates, statusLabels) };
+        setData(data.map(d => d.id === intervention.id ? updated : d));
+        setSelectedIntervention(updated);
+      }
+      toast({ title: t("interventions.status_updated"), description: `${intervention.id} → ${statusConfig[nextStatus].label}` });
+    } catch (e) {
+      console.error("Update status error:", e);
+      toast({ title: t("interventions.update_error"), description: t("interventions.update_error_desc"), variant: "destructive" });
     }
-    setData(data.map(d => d.id === intervention.id ? updated : d));
-    setSelectedIntervention(updated);
-    toast({ title: t("interventions.status_updated"), description: `${intervention.id} → ${statusConfig[nextStatus].label}` });
   };
 
-  const cancelIntervention = (intervention: Intervention) => {
-    const updated: Intervention = {
-      ...intervention, status: "cancelled",
-      timeline: fullTimeline("cancelled", { created: intervention.timeline[0]?.date || now(), cancelled: now() }, statusLabels),
-    };
-    if (apiBacked) {
-      void updateServiceRequestStatus(intervention.id, { status: "cancelled" }).catch(() => {
-        toast({ title: t("interventions.update_error"), description: t("interventions.update_error_desc"), variant: "destructive" });
-      });
+  const cancelIntervention = async (intervention: Intervention) => {
+    try {
+      if (apiBacked || !allowFallback) {
+        const res = await updateServiceRequestStatus(intervention.id, { status: "cancelled" }) as { item?: ServiceRequestDTO };
+        const updated = res?.item ? mapServiceRequest(res.item) : null;
+        
+        if (updated) {
+          setData(data.map(d => d.id === intervention.id ? updated : d));
+          setSelectedIntervention(updated);
+        } else {
+          const localUpdated: Intervention = {
+            ...intervention, status: "cancelled",
+            timeline: fullTimeline("cancelled", { created: intervention.timeline[0]?.date || now(), cancelled: now() }, statusLabels),
+          };
+          setData(data.map(d => d.id === intervention.id ? localUpdated : d));
+          setSelectedIntervention(localUpdated);
+        }
+      } else {
+        const updated: Intervention = {
+          ...intervention, status: "cancelled",
+          timeline: fullTimeline("cancelled", { created: intervention.timeline[0]?.date || now(), cancelled: now() }, statusLabels),
+        };
+        setData(data.map(d => d.id === intervention.id ? updated : d));
+        setSelectedIntervention(updated);
+      }
+      toast({ title: t("interventions.cancelled_success"), description: `${intervention.id}` });
+    } catch (e) {
+      console.error("Cancel intervention error:", e);
+      toast({ title: t("interventions.update_error"), description: t("interventions.update_error_desc"), variant: "destructive" });
     }
-    setData(data.map(d => d.id === intervention.id ? updated : d));
-    setSelectedIntervention(updated);
-    toast({ title: t("interventions.cancelled_success"), description: `${intervention.id}` });
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!deleteTarget) return;
-    setData(data.filter(d => d.id !== deleteTarget.id));
-    setDeleteTarget(null);
-    setModalOpen(false);
-    setSelectedIntervention(null);
-    toast({ title: t("interventions.deleted_success"), description: `${deleteTarget.id}` });
+    try {
+      if (apiBacked || !allowFallback) {
+        await deleteServiceRequest(deleteTarget.id);
+      }
+      setData(data.filter(d => d.id !== deleteTarget.id));
+      setDeleteTarget(null);
+      setModalOpen(false);
+      setSelectedIntervention(null);
+      toast({ title: t("interventions.deleted_success"), description: `${deleteTarget.id}` });
+    } catch (e) {
+      console.error("Delete intervention error:", e);
+      toast({ title: t("interventions.update_error"), description: t("interventions.update_error_desc"), variant: "destructive" });
+    }
   };
 
   const tableHeaders = [
@@ -506,8 +699,21 @@ const Interventions = () => {
                   </div>
                 </div>
 
-                <div className="p-6 space-y-5">
-                  <div className="grid grid-cols-2 gap-3">
+                <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="w-full">
+                  <div className="px-6 border-b border-border bg-muted/10">
+                    <TabsList className="h-11 w-full bg-transparent justify-start gap-6 rounded-none p-0 border-none">
+                      <TabsTrigger value="details" className="relative h-11 rounded-none border-b-2 border-transparent px-2 pb-3 pt-2 font-semibold text-muted-foreground data-[state=active]:border-primary data-[state=active]:text-foreground data-[state=active]:shadow-none transition-all">
+                        Détails
+                      </TabsTrigger>
+                      <TabsTrigger value="chat" className="relative h-11 rounded-none border-b-2 border-transparent px-2 pb-3 pt-2 font-semibold text-muted-foreground data-[state=active]:border-primary data-[state=active]:text-foreground data-[state=active]:shadow-none transition-all gap-2">
+                        Chat
+                        <Badge variant="secondary" className="h-4 px-1 text-[9px] font-bold bg-primary/10 text-primary border-primary/20">LIVE</Badge>
+                      </TabsTrigger>
+                    </TabsList>
+                  </div>
+
+                  <TabsContent value="details" className="p-6 space-y-5 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="grid grid-cols-2 gap-3">
                     <InfoCard icon={Truck} title={t("interventions.fleet_manager")} value={selectedIntervention.fleetManager} />
                     <InfoCard icon={Wrench} title={t("interventions.service_provider")} value={selectedIntervention.serviceProvider} />
                     <InfoCard icon={User} title={t("interventions.technician")} value={selectedIntervention.technician} />
@@ -553,10 +759,19 @@ const Interventions = () => {
                       })}
                     </div>
                   </div>
-                </div>
-              </>
-            );
-          })()}
+                </TabsContent>
+
+                <TabsContent value="chat" className="p-6 pt-2 animate-in fade-in slide-in-from-bottom-2">
+                  <ChatPanel 
+                    requestId={selectedIntervention.id} 
+                    customerName={selectedIntervention.fleetManager}
+                    providerName={selectedIntervention.serviceProvider}
+                  />
+                </TabsContent>
+              </Tabs>
+            </>
+          );
+        })()}
         </DialogContent>
       </Dialog>
 
@@ -571,22 +786,30 @@ const Interventions = () => {
               <Label>{t("interventions.fleet_manager")}</Label>
               <Select value={form.fleetManager} onValueChange={v => setForm({ ...form, fleetManager: v })}>
                 <SelectTrigger className="rounded-xl"><SelectValue placeholder={t("interventions.select")} /></SelectTrigger>
-                <SelectContent>{fleetManagers.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
+                <SelectContent>{fleetManagerOptions.map((fleet) => <SelectItem key={fleet.id} value={fleet.id}>{fleet.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
               <Label>{t("interventions.service_provider")}</Label>
               <Select value={form.serviceProvider} onValueChange={v => setForm({ ...form, serviceProvider: v })}>
                 <SelectTrigger className="rounded-xl"><SelectValue placeholder={t("interventions.select")} /></SelectTrigger>
-                <SelectContent>{serviceProviders.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
+                <SelectContent>{serviceProviderOptions.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
               <Label>{t("interventions.technician")}</Label>
-              <Select value={form.technician} onValueChange={v => setForm({ ...form, technician: v })}>
-                <SelectTrigger className="rounded-xl"><SelectValue placeholder={t("interventions.select")} /></SelectTrigger>
-                <SelectContent>{technicians.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
-              </Select>
+              {apiBacked ? (
+                <Input
+                  className="rounded-xl"
+                  value="Affectation technicien non disponible via backend"
+                  disabled
+                />
+              ) : (
+                <Select value={form.technician} onValueChange={v => setForm({ ...form, technician: v })}>
+                  <SelectTrigger className="rounded-xl"><SelectValue placeholder={t("interventions.select")} /></SelectTrigger>
+                  <SelectContent>{fallbackTechnicians.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
+                </Select>
+              )}
             </div>
             <div className="space-y-2">
               <Label>{t("interventions.service_type")}</Label>

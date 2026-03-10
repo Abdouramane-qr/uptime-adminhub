@@ -42,60 +42,60 @@ const FleetManagers = () => {
   const [form, setForm] = useState({ company: "", contact: "", email: "", phone: "", city: "", vehicles: "0" });
   const [deleteTarget, setDeleteTarget] = useState<FleetManager | null>(null);
 
+  const norm = (v: string | undefined) => String(v || "").trim().toLowerCase();
+  const isFleet = (tnt: TenantDTO) => {
+    const k = norm(tnt.tenant_type || tnt.type);
+    return k.includes("fleet");
+  };
+  const isActiveStatus = (s: string | undefined) => {
+    const k = norm(s);
+    return !["completed", "cancelled"].includes(k);
+  };
+
+  const loadManagers = async () => {
+    try {
+      const [tenants, requests] = await Promise.all([listTenants(), listServiceRequests()]);
+      const agg = new Map<string, { active: number; total: number }>();
+      requests.forEach((r: ServiceRequestDTO) => {
+        const key = norm(r.fleet_manager || r.client_name || r.client);
+        if (!key) return;
+        if (!agg.has(key)) agg.set(key, { active: 0, total: 0 });
+        const bucket = agg.get(key)!;
+        bucket.total += 1;
+        if (isActiveStatus(r.status)) bucket.active += 1;
+      });
+
+      const mapped: FleetManager[] = tenants.filter(isFleet).map((tnt) => {
+        const company = tnt.company_name || tnt.company || "Fleet";
+        const stats = agg.get(norm(company)) || { active: 0, total: 0 };
+        return {
+          id: String(tnt.id),
+          company,
+          contact: tnt.owner_email || "N/A",
+          email: tnt.email || tnt.owner_email || "N/A",
+          phone: tnt.phone || "N/A",
+          city: "Backend non raccorde",
+          vehicles: 0,
+          activeInterventions: stats.active,
+          totalInterventions: stats.total,
+          status: String(tnt.status || "").toLowerCase().includes("active") ? "active" : "inactive",
+          joined: tnt.created_at ? new Date(tnt.created_at).toLocaleDateString("fr-FR") : "N/A",
+          fleetTypes: ["Backend non raccorde"],
+          avgMonthly: 0,
+        };
+      });
+
+      setManagers(mapped);
+      setApiBacked(true);
+    } catch {
+      setApiBacked(false);
+      reportFallbackHit("FleetManagers");
+      if (!allowFallback) setManagers([]);
+    }
+  };
+
   useEffect(() => {
-    const norm = (v: string | undefined) => String(v || "").trim().toLowerCase();
-    const isFleet = (tnt: TenantDTO) => {
-      const k = norm(tnt.tenant_type || tnt.type);
-      return k.includes("fleet");
-    };
-    const isActiveStatus = (s: string | undefined) => {
-      const k = norm(s);
-      return !["completed", "cancelled"].includes(k);
-    };
-
-    const load = async () => {
-      try {
-        const [tenants, requests] = await Promise.all([listTenants(), listServiceRequests()]);
-        const agg = new Map<string, { active: number; total: number }>();
-        requests.forEach((r: ServiceRequestDTO) => {
-          const key = norm(r.fleet_manager || r.client_name || r.client);
-          if (!key) return;
-          if (!agg.has(key)) agg.set(key, { active: 0, total: 0 });
-          const bucket = agg.get(key)!;
-          bucket.total += 1;
-          if (isActiveStatus(r.status)) bucket.active += 1;
-        });
-
-        const mapped: FleetManager[] = tenants.filter(isFleet).map((tnt) => {
-          const company = tnt.company_name || tnt.company || "Fleet";
-          const stats = agg.get(norm(company)) || { active: 0, total: 0 };
-          return {
-            id: String(tnt.id),
-            company,
-            contact: tnt.owner_email || "N/A",
-            email: tnt.email || tnt.owner_email || "N/A",
-            phone: tnt.phone || "N/A",
-            city: "N/A",
-            vehicles: 0,
-            activeInterventions: stats.active,
-            totalInterventions: stats.total,
-            status: String(tnt.status || "").toLowerCase().includes("active") ? "active" : "inactive",
-            joined: tnt.created_at ? new Date(tnt.created_at).toLocaleDateString("fr-FR") : "N/A",
-            fleetTypes: ["N/A"],
-            avgMonthly: 0,
-          };
-        });
-
-        setManagers(mapped);
-        setApiBacked(true);
-      } catch {
-        setApiBacked(false);
-        reportFallbackHit("FleetManagers");
-        if (!allowFallback) setManagers([]);
-      }
-    };
-
-    void load();
+    void loadManagers();
   }, [allowFallback]);
 
   const filtered = managers.filter((f) => {
@@ -115,48 +115,59 @@ const FleetManagers = () => {
 
   const handleSave = async () => {
     if (!form.company || !form.email) { toast({ title: t("fleet.required_fields"), description: t("fleet.required_fields_desc"), variant: "destructive" }); return; }
-    if (editing) {
-      if (apiBacked) {
-        await updateTenant(String(editing.id), {
-          company_name: form.company,
-          tenant_type: "fleet_manager",
-          email: form.email,
-          phone: form.phone,
-          status: "active",
-        }).catch(() => {
-          toast({ title: t("fleet.update_error"), description: "Backend update failed", variant: "destructive" });
-        });
+    try {
+      if (editing) {
+        if (apiBacked) {
+          await updateTenant(String(editing.id), {
+            company_name: form.company,
+            tenant_type: "fleet_manager",
+            email: form.email,
+            phone: form.phone,
+          });
+          await loadManagers();
+        } else {
+          setManagers(prev => prev.map(m => m.id === editing.id ? { ...m, company: form.company, contact: form.contact, email: form.email, phone: form.phone, city: form.city, vehicles: Number(form.vehicles) } : m));
+        }
+        toast({ title: t("fleet.updated"), description: `${form.company} ${t("fleet.updated_desc")}` });
+      } else {
+        if (apiBacked) {
+          await createAccount({
+            company_name: form.company,
+            tenant_type: "fleet_manager",
+            email: form.email,
+            phone: form.phone,
+            registration_number: null,
+          });
+          await loadManagers();
+        } else {
+          setManagers(prev => [{ id: Date.now(), ...form, vehicles: Number(form.vehicles), activeInterventions: 0, totalInterventions: 0, status: "active", joined: "Mar 2026", fleetTypes: ["Utilitaires"], avgMonthly: 0 }, ...prev]);
+        }
+        toast({ title: t("fleet.created"), description: `${form.company} ${t("fleet.created_desc")}` });
       }
-      setManagers(prev => prev.map(m => m.id === editing.id ? { ...m, company: form.company, contact: form.contact, email: form.email, phone: form.phone, city: form.city, vehicles: Number(form.vehicles) } : m));
-      toast({ title: t("fleet.updated"), description: `${form.company} ${t("fleet.updated_desc")}` });
-    } else {
-      if (apiBacked) {
-        await createAccount({
-          company_name: form.company,
-          tenant_type: "fleet_manager",
-          email: form.email,
-          phone: form.phone,
-          registration_number: null,
-        }).catch(() => {
-          toast({ title: t("fleet.create_error"), description: "Backend create failed", variant: "destructive" });
-        });
-      }
-      setManagers(prev => [{ id: Date.now(), ...form, vehicles: Number(form.vehicles), activeInterventions: 0, totalInterventions: 0, status: "active", joined: "Mar 2026", fleetTypes: ["Utilitaires"], avgMonthly: 0 }, ...prev]);
-      toast({ title: t("fleet.created"), description: `${form.company} ${t("fleet.created_desc")}` });
+      setFormOpen(false);
+    } catch {
+      toast({
+        title: editing ? t("fleet.update_error") : t("fleet.create_error"),
+        description: editing ? "Backend update failed" : "Backend create failed",
+        variant: "destructive",
+      });
     }
-    setFormOpen(false);
   };
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    if (apiBacked) {
-      await deleteTenant(String(deleteTarget.id)).catch(() => {
-        toast({ title: t("fleet.delete_error"), description: "Backend delete failed", variant: "destructive" });
-      });
+    try {
+      if (apiBacked) {
+        await deleteTenant(String(deleteTarget.id));
+        await loadManagers();
+      } else {
+        setManagers(prev => prev.filter(m => m.id !== deleteTarget.id));
+      }
+      toast({ title: t("fleet.deleted"), description: `${deleteTarget.company} ${t("fleet.deleted_desc")}` });
+      setDeleteTarget(null); setSelected(null);
+    } catch {
+      toast({ title: t("fleet.delete_error"), description: "Backend delete failed", variant: "destructive" });
     }
-    setManagers(prev => prev.filter(m => m.id !== deleteTarget.id));
-    toast({ title: t("fleet.deleted"), description: `${deleteTarget.company} ${t("fleet.deleted_desc")}` });
-    setDeleteTarget(null); setSelected(null);
   };
 
   return (

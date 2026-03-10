@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './useAuth';
 
 const {
   getSessionMock,
+  getUserMock,
   onAuthStateChangeMock,
   signInWithPasswordMock,
   signOutMock,
@@ -11,6 +12,7 @@ const {
   rpcMock,
 } = vi.hoisted(() => {
   const getSessionMock = vi.fn();
+  const getUserMock = vi.fn();
   const onAuthStateChangeMock = vi.fn();
   const signInWithPasswordMock = vi.fn();
   const signOutMock = vi.fn();
@@ -19,6 +21,7 @@ const {
 
   return {
     getSessionMock,
+    getUserMock,
     onAuthStateChangeMock,
     signInWithPasswordMock,
     signOutMock,
@@ -31,6 +34,7 @@ vi.mock('@/integrations/supabase/client', () => ({
   supabase: {
     auth: {
       getSession: getSessionMock,
+      getUser: getUserMock,
       onAuthStateChange: onAuthStateChangeMock,
       signInWithPassword: signInWithPasswordMock,
       signOut: signOutMock,
@@ -39,7 +43,7 @@ vi.mock('@/integrations/supabase/client', () => ({
     from: vi.fn(() => ({
       select: vi.fn(() => ({
         eq: vi.fn(() => ({
-          single: vi.fn().mockResolvedValue({ data: null }),
+          maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
         })),
       })),
     })),
@@ -61,11 +65,13 @@ function AuthActionsProbe() {
 describe('useAuth actions', () => {
   beforeEach(() => {
     getSessionMock.mockReset();
+    getUserMock.mockReset();
     onAuthStateChangeMock.mockReset();
     signInWithPasswordMock.mockReset();
     signOutMock.mockReset();
     fetchMock.mockReset();
     rpcMock.mockReset();
+    getUserMock.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null });
 
     vi.stubGlobal('fetch', fetchMock);
 
@@ -86,7 +92,15 @@ describe('useAuth actions', () => {
   });
 
   it('delegates signIn to Supabase auth client', async () => {
-    signInWithPasswordMock.mockResolvedValue({ error: null });
+    signInWithPasswordMock.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'header.payload.signature',
+          user: { id: 'user-1' },
+        },
+      },
+      error: null,
+    });
 
     render(
       <AuthProvider>

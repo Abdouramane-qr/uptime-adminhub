@@ -27,6 +27,7 @@ import Billing from "./pages/Billing";
 import Analytics from "./pages/Analytics";
 import Documentation from "./pages/Documentation";
 import UserGuide from "./pages/UserGuide";
+import AdminOnboarding from "./pages/AdminOnboarding";
 import SpDashboard from "./pages/sp/SpDashboard";
 import SpTechnicians from "./pages/sp/SpTechnicians";
 import SpServices from "./pages/sp/SpServices";
@@ -57,7 +58,7 @@ const App = () => (
           <TooltipProvider>
             <Toaster />
             <Sonner />
-            <BrowserRouter>
+            <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
               <Routes>
                 <Route path="/login" element={<Login />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
@@ -66,6 +67,7 @@ const App = () => (
                   <Route index element={<Navigate to="/dashboard" replace />} />
                   <Route path="dashboard" element={<Dashboard />} />
                   <Route path="accounts" element={<RoleGuard allowedRoles={["admin"]}><Accounts /></RoleGuard>} />
+                  <Route path="onboarding" element={<RoleGuard allowedRoles={["admin"]}><AdminOnboarding /></RoleGuard>} />
                   <Route path="providers" element={<Providers />} />
                   <Route path="fleet-managers" element={<FleetManagers />} />
                   <Route path="interventions" element={<Interventions />} />

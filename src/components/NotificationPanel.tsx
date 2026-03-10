@@ -1,32 +1,47 @@
 import { useState, useRef, useEffect } from "react";
 import { Bell, Check } from "lucide-react";
-
-interface Notification {
-  id: number;
-  title: string;
-  message: string;
-  time: string;
-  read: boolean;
-}
-
-const initialNotifications: Notification[] = [
-  { id: 1, title: "New account submitted", message: "AutoFix Pro Services submitted a registration request", time: "5 min ago", read: false },
-  { id: 2, title: "Intervention completed", message: "Job #INT-2026-0340 was marked as completed", time: "23 min ago", read: false },
-  { id: 3, title: "Technician assigned", message: "Jean Dupont assigned to Job #INT-2026-0341", time: "1h ago", read: true },
-  { id: 4, title: "Payment received", message: "GreenHaul Logistics — Invoice #INV-0412 paid", time: "3h ago", read: true },
-  { id: 5, title: "Account approved", message: "Metro Fleet Solutions account was approved", time: "5h ago", read: false },
-];
+import { reportFallbackHit } from "@/lib/fallbackTelemetry";
+import { allowMockFallback } from "@/lib/runtimeFlags";
+import { listNotifications, type NotificationDTO } from "@/lib/adminPortalClient";
 
 const NotificationPanel = () => {
+  const allowFallback = allowMockFallback();
   const [open, setOpen] = useState(false);
-  const [notifications, setNotifications] = useState(initialNotifications);
+  const [notifications, setNotifications] = useState<NotificationDTO[]>([]);
+  const [apiBacked, setApiBacked] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const unreadCount = notifications.filter((n) => !n.read_at).length;
 
   const markAllRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    const now = new Date().toISOString();
+    setNotifications((prev) => prev.map((n) => ({ ...n, read_at: n.read_at || now })));
   };
+
+  const displayTime = (iso?: string) => {
+    if (!iso) return "just now";
+    return new Date(iso).toLocaleString("fr-FR", { hour12: false });
+  };
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const rows = await listNotifications(25);
+        setNotifications(rows);
+        setApiBacked(true);
+      } catch (e) {
+        setApiBacked(false);
+        reportFallbackHit("Notifications");
+        if (allowFallback) {
+          setNotifications([
+            { id: Number.POSITIVE_INFINITY, title: "Notifications offline", body: "Cannot reach Supabase right now.", created_at: new Date().toISOString(), read_at: null },
+          ]);
+        }
+      }
+    };
+
+    void load();
+  }, [allowFallback]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -66,12 +81,12 @@ const NotificationPanel = () => {
               <div
                 key={n.id}
                 className={`px-4 py-3 border-b border-border last:border-0 hover:bg-muted/30 transition-colors ${
-                  !n.read ? "border-l-2 border-l-primary" : ""
+                  !n.read_at ? "border-l-2 border-l-primary" : ""
                 }`}
               >
-                <p className={`text-sm ${!n.read ? "font-semibold text-foreground" : "text-foreground"}`}>{n.title}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{n.message}</p>
-                <p className="text-[10px] text-muted-foreground mt-1">{n.time}</p>
+                <p className={`text-sm ${!n.read_at ? "font-semibold text-foreground" : "text-foreground"}`}>{n.title}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{n.body || "Notification"}</p>
+                <p className="text-[10px] text-muted-foreground mt-1">{displayTime(n.created_at)}</p>
               </div>
             ))}
           </div>

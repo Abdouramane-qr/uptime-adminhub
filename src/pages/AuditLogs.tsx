@@ -36,32 +36,33 @@ const AuditLogs = () => {
   const allowFallback = allowMockFallback();
   const [search, setSearch] = useState("");
   const [filterAction, setFilterAction] = useState<ActionType | "all">("all");
-  const [logs, setLogs] = useState<AuditLog[]>(allowFallback ? mockLogs : []);
+  const [logs, setLogs] = useState<AuditLog[]>([]);
   const [apiBacked, setApiBacked] = useState(false);
 
   useEffect(() => {
     const load = async () => {
       try {
         const auditRows = await listAuditLogs();
-        if (auditRows.length > 0) {
-          const mapped: AuditLog[] = auditRows.map((r, idx) => ({
-            id: r.id || `LOG-${idx + 1}`,
-            date: r.date
-              ? new Date(r.date).toLocaleString("fr-FR", { hour12: false })
-              : new Date().toLocaleString("fr-FR", { hour12: false }),
-            actor: r.actor || "Admin User",
-            action: (r.action as ActionType) || "update",
-            description: r.description || `Audit log ${r.id || idx + 1}`,
-            target: r.target || "N/A",
-          }));
-          setLogs(mapped);
-          setApiBacked(true);
-        }
+        const mapped: AuditLog[] = auditRows.map((r, idx) => ({
+          id: r.id || `LOG-${idx + 1}`,
+          date: r.date
+            ? new Date(r.date).toLocaleString("fr-FR", { hour12: false })
+            : new Date().toLocaleString("fr-FR", { hour12: false }),
+          actor: r.actor || "Admin User",
+          action: (r.action as ActionType) || "update",
+          description: r.description || `Audit log ${r.id || idx + 1}`,
+          target: r.target || "N/A",
+        }));
+        setLogs(mapped);
+        setApiBacked(true);
       } catch {
-        // Keep mock fallback
         setApiBacked(false);
         reportFallbackHit("AuditLogs");
-        if (!allowFallback) setLogs([]);
+        if (!allowFallback) {
+          setLogs([]);
+        } else {
+          setLogs(mockLogs);
+        }
       }
     };
 

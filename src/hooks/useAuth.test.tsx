@@ -2,12 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { AuthProvider, useAuth } from './useAuth';
 
+const jwt = (value: string) => `header.${value}.signature`;
+
 const {
   getSessionMock,
+  getUserMock,
   onAuthStateChangeMock,
   signInWithPasswordMock,
   signOutMock,
-  fromSingleMock,
+  fromMaybeSingleMock,
   fromEqMock,
   fromSelectMock,
   rpcMock,
@@ -15,12 +18,13 @@ const {
   authStateHandlerRef,
 } = vi.hoisted(() => {
   const getSessionMock = vi.fn();
+  const getUserMock = vi.fn();
   const onAuthStateChangeMock = vi.fn();
   const signInWithPasswordMock = vi.fn();
   const signOutMock = vi.fn();
 
-  const fromSingleMock = vi.fn();
-  const fromEqMock = vi.fn(() => ({ single: fromSingleMock }));
+  const fromMaybeSingleMock = vi.fn();
+  const fromEqMock = vi.fn(() => ({ maybeSingle: fromMaybeSingleMock }));
   const fromSelectMock = vi.fn(() => ({ eq: fromEqMock }));
   const rpcMock = vi.fn();
 
@@ -29,10 +33,11 @@ const {
 
   return {
     getSessionMock,
+    getUserMock,
     onAuthStateChangeMock,
     signInWithPasswordMock,
     signOutMock,
-    fromSingleMock,
+    fromMaybeSingleMock,
     fromEqMock,
     fromSelectMock,
     rpcMock,
@@ -45,6 +50,7 @@ vi.mock('@/integrations/supabase/client', () => ({
   supabase: {
     auth: {
       getSession: getSessionMock,
+      getUser: getUserMock,
       onAuthStateChange: onAuthStateChangeMock,
       signInWithPassword: signInWithPasswordMock,
       signOut: signOutMock,
@@ -71,15 +77,28 @@ function AuthProbe() {
 describe('useAuth integration', () => {
   beforeEach(() => {
     getSessionMock.mockReset();
+    getUserMock.mockReset();
     onAuthStateChangeMock.mockReset();
     signInWithPasswordMock.mockReset();
     signOutMock.mockReset();
-    fromSingleMock.mockReset();
+    fromMaybeSingleMock.mockReset();
     fromEqMock.mockClear();
     fromSelectMock.mockClear();
     rpcMock.mockReset();
     fetchMock.mockReset();
     authStateHandlerRef.current = null;
+    getUserMock.mockImplementation(async (token?: string) => {
+      if (token === jwt('token-403')) {
+        return { data: { user: { id: 'user-2' } }, error: null };
+      }
+      if (token === jwt('token-err')) {
+        return { data: { user: { id: 'user-3' } }, error: null };
+      }
+      if (token === jwt('token-init')) {
+        return { data: { user: { id: 'user-init' } }, error: null };
+      }
+      return { data: { user: { id: 'user-1' } }, error: null };
+    });
 
     vi.stubGlobal('fetch', fetchMock);
 
@@ -94,7 +113,7 @@ describe('useAuth integration', () => {
       };
     });
 
-    fromSingleMock.mockResolvedValue({
+    fromMaybeSingleMock.mockResolvedValue({
       data: {
         id: 'profile-1',
         full_name: 'Admin User',
@@ -109,7 +128,7 @@ describe('useAuth integration', () => {
     getSessionMock.mockResolvedValue({
       data: {
         session: {
-          access_token: 'token-rpc-admin',
+          access_token: jwt('token-rpc-admin'),
           user: { id: 'user-1' },
         },
       },
@@ -137,7 +156,7 @@ describe('useAuth integration', () => {
     getSessionMock.mockResolvedValue({
       data: {
         session: {
-          access_token: 'token-200',
+          access_token: jwt('token-200'),
           user: { id: 'user-1' },
         },
       },
@@ -163,7 +182,7 @@ describe('useAuth integration', () => {
     getSessionMock.mockResolvedValue({
       data: {
         session: {
-          access_token: 'token-403',
+          access_token: jwt('token-403'),
           user: { id: 'user-2' },
         },
       },
@@ -189,7 +208,7 @@ describe('useAuth integration', () => {
     getSessionMock.mockResolvedValue({
       data: {
         session: {
-          access_token: 'token-err',
+          access_token: jwt('token-err'),
           user: { id: 'user-3' },
         },
       },
@@ -235,7 +254,7 @@ describe('useAuth integration', () => {
     getSessionMock.mockResolvedValue({
       data: {
         session: {
-          access_token: 'token-init',
+          access_token: jwt('token-init'),
           user: { id: 'user-init' },
         },
       },

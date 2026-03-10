@@ -37,35 +37,43 @@ const Billing = () => {
   const allowFallback = allowMockFallback();
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<PaymentStatus | "all">("all");
-  const [invoices, setInvoices] = useState<Invoice[]>(allowFallback ? mockInvoices : []);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [backendTotals, setBackendTotals] = useState<{ paidRevenue: number; commissions: number; pendingAmount: number } | null>(null);
   const [apiBacked, setApiBacked] = useState(false);
 
   useEffect(() => {
     const load = async () => {
       try {
         const payload = await listBillingInvoices();
-        if (payload.items.length > 0) {
-          const mapped = payload.items.map((r, idx): Invoice => {
-            const amount = Number(r.amount ?? 0) || 0;
-            return {
-              id: r.id || `INV-${String(5000 + idx)}`,
-              date: r.date || new Date().toISOString().slice(0, 10),
-              client: r.client || "Client",
-              provider: r.provider || "Provider",
-              interventionId: r.intervention_id || "N/A",
-              amount,
-              commission: Number(r.commission ?? Number((amount * 0.15).toFixed(2))),
-              status: (r.status as PaymentStatus) || "pending",
-            };
-          });
-          setInvoices(mapped);
-          setApiBacked(true);
-        }
+        const mapped = payload.items.map((r, idx): Invoice => {
+          const amount = Number(r.amount ?? 0) || 0;
+          return {
+            id: r.id || `INV-${String(5000 + idx)}`,
+            date: r.date || new Date().toISOString().slice(0, 10),
+            client: r.client || "Client",
+            provider: r.provider || "Provider",
+            interventionId: r.intervention_id || "N/A",
+            amount,
+            commission: Number(r.commission ?? Number((amount * 0.15).toFixed(2))),
+            status: (r.status as PaymentStatus) || "pending",
+          };
+        });
+        setInvoices(mapped);
+        setBackendTotals({
+          paidRevenue: Number(payload.totals?.paid_revenue ?? 0) || 0,
+          commissions: Number(payload.totals?.commissions ?? 0) || 0,
+          pendingAmount: Number(payload.totals?.pending_amount ?? 0) || 0,
+        });
+        setApiBacked(true);
       } catch {
-        // Keep mock fallback
         setApiBacked(false);
+        setBackendTotals(null);
         reportFallbackHit("Billing");
-        if (!allowFallback) setInvoices([]);
+        if (!allowFallback) {
+          setInvoices([]);
+        } else {
+          setInvoices(mockInvoices);
+        }
       }
     };
 
@@ -85,9 +93,9 @@ const Billing = () => {
     return matchSearch && matchStatus;
   });
 
-  const totalRevenue = useMemo(() => invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.amount, 0), [invoices]);
-  const totalCommissions = useMemo(() => invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.commission, 0), [invoices]);
-  const pendingAmount = useMemo(() => invoices.filter(i => i.status === "pending" || i.status === "overdue").reduce((s, i) => s + i.amount, 0), [invoices]);
+  const totalRevenue = useMemo(() => backendTotals?.paidRevenue ?? invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.amount, 0), [backendTotals, invoices]);
+  const totalCommissions = useMemo(() => backendTotals?.commissions ?? invoices.filter(i => i.status === "paid").reduce((s, i) => s + i.commission, 0), [backendTotals, invoices]);
+  const pendingAmount = useMemo(() => backendTotals?.pendingAmount ?? invoices.filter(i => i.status === "pending" || i.status === "overdue").reduce((s, i) => s + i.amount, 0), [backendTotals, invoices]);
 
   const providerEarnings = invoices
     .filter(i => i.status === "paid")

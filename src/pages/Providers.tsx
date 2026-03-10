@@ -45,66 +45,66 @@ const Providers = () => {
   const [form, setForm] = useState({ name: "", contact: "", email: "", phone: "", city: "", radius: "30", services: [] as string[] });
   const [deleteTarget, setDeleteTarget] = useState<Provider | null>(null);
 
+  const norm = (v: string | undefined) => String(v || "").trim().toLowerCase();
+  const isProviderTenant = (tnt: TenantDTO) => {
+    const k = norm(tnt.tenant_type || tnt.type);
+    return k.includes("service") || k === "sp" || k.includes("provider");
+  };
+  const isCompleted = (s: string | undefined) => {
+    const k = norm(s);
+    return k === "completed" || k === "cancelled";
+  };
+
+  const loadProviders = async () => {
+    try {
+      const [tenants, requests] = await Promise.all([listTenants(), listServiceRequests()]);
+      const agg = new Map<string, { completed: number; active: number; services: Set<string> }>();
+
+      requests.forEach((r: ServiceRequestDTO) => {
+        const key = norm(r.provider_name || r.assigned_provider);
+        if (!key) return;
+        if (!agg.has(key)) agg.set(key, { completed: 0, active: 0, services: new Set<string>() });
+        const bucket = agg.get(key)!;
+        if (r.service_type || r.type) bucket.services.add(String(r.service_type || r.type));
+        if (isCompleted(r.status)) bucket.completed += 1;
+        else bucket.active += 1;
+      });
+
+      const mapped: Provider[] = tenants.filter(isProviderTenant).map((tnt) => {
+        const name = tnt.company_name || tnt.company || "Provider";
+        const key = norm(name);
+        const stats = agg.get(key) || { completed: 0, active: 0, services: new Set<string>() };
+        return {
+          id: String(tnt.id),
+          name,
+          contact: tnt.owner_email || "N/A",
+          email: tnt.email || tnt.owner_email || "N/A",
+          phone: tnt.phone || "N/A",
+          city: "Backend non raccorde",
+          radius: 0,
+          rating: 0,
+          reviews: 0,
+          technicians: 0,
+          completedJobs: stats.completed,
+          activeJobs: stats.active,
+          services: Array.from(stats.services),
+          status: String(tnt.status || "pending").toLowerCase().includes("approved") ? "approved" : "pending",
+          joined: tnt.created_at ? new Date(tnt.created_at).toLocaleDateString("fr-FR") : "N/A",
+          responseTime: "Backend non raccorde",
+        };
+      });
+
+      setProviders(mapped);
+      setApiBacked(true);
+    } catch {
+      setApiBacked(false);
+      reportFallbackHit("Providers");
+      if (!allowFallback) setProviders([]);
+    }
+  };
+
   useEffect(() => {
-    const norm = (v: string | undefined) => String(v || "").trim().toLowerCase();
-    const isProviderTenant = (tnt: TenantDTO) => {
-      const k = norm(tnt.tenant_type || tnt.type);
-      return k.includes("service") || k === "sp" || k.includes("provider");
-    };
-    const isCompleted = (s: string | undefined) => {
-      const k = norm(s);
-      return k === "completed" || k === "cancelled";
-    };
-
-    const load = async () => {
-      try {
-        const [tenants, requests] = await Promise.all([listTenants(), listServiceRequests()]);
-        const agg = new Map<string, { completed: number; active: number; services: Set<string> }>();
-
-        requests.forEach((r: ServiceRequestDTO) => {
-          const key = norm(r.provider_name || r.assigned_provider);
-          if (!key) return;
-          if (!agg.has(key)) agg.set(key, { completed: 0, active: 0, services: new Set<string>() });
-          const bucket = agg.get(key)!;
-          if (r.service_type || r.type) bucket.services.add(String(r.service_type || r.type));
-          if (isCompleted(r.status)) bucket.completed += 1;
-          else bucket.active += 1;
-        });
-
-        const mapped: Provider[] = tenants.filter(isProviderTenant).map((tnt) => {
-          const name = tnt.company_name || tnt.company || "Provider";
-          const key = norm(name);
-          const stats = agg.get(key) || { completed: 0, active: 0, services: new Set<string>() };
-          return {
-            id: String(tnt.id),
-            name,
-            contact: tnt.owner_email || "N/A",
-            email: tnt.email || tnt.owner_email || "N/A",
-            phone: tnt.phone || "N/A",
-            city: "N/A",
-            radius: 0,
-            rating: 0,
-            reviews: 0,
-            technicians: 0,
-            completedJobs: stats.completed,
-            activeJobs: stats.active,
-            services: Array.from(stats.services),
-            status: String(tnt.status || "pending").toLowerCase().includes("approved") ? "approved" : "pending",
-            joined: tnt.created_at ? new Date(tnt.created_at).toLocaleDateString("fr-FR") : "N/A",
-            responseTime: "N/A",
-          };
-        });
-
-        setProviders(mapped);
-        setApiBacked(true);
-      } catch {
-        setApiBacked(false);
-        reportFallbackHit("Providers");
-        if (!allowFallback) setProviders([]);
-      }
-    };
-
-    void load();
+    void loadProviders();
   }, [allowFallback]);
 
   const filtered = providers.filter((p) => {
@@ -119,48 +119,59 @@ const Providers = () => {
 
   const handleSave = async () => {
     if (!form.name || !form.email) { toast({ title: t("providers.required_fields"), description: t("providers.required_fields_desc"), variant: "destructive" }); return; }
-    if (editing) {
-      if (apiBacked) {
-        await updateTenant(String(editing.id), {
-          company_name: form.name,
-          tenant_type: "service_provider",
-          email: form.email,
-          phone: form.phone,
-          status: form.services.length > 0 ? "approved" : "pending",
-        }).catch(() => {
-          toast({ title: t("providers.update_error"), description: "Backend update failed", variant: "destructive" });
-        });
+    try {
+      if (editing) {
+        if (apiBacked) {
+          await updateTenant(String(editing.id), {
+            company_name: form.name,
+            tenant_type: "service_provider",
+            email: form.email,
+            phone: form.phone,
+          });
+          await loadProviders();
+        } else {
+          setProviders(prev => prev.map(p => p.id === editing.id ? { ...p, name: form.name, contact: form.contact, email: form.email, phone: form.phone, city: form.city, radius: Number(form.radius), services: form.services } : p));
+        }
+        toast({ title: t("providers.updated"), description: `${form.name} ${t("providers.updated_desc")}` });
+      } else {
+        if (apiBacked) {
+          await createAccount({
+            company_name: form.name,
+            tenant_type: "service_provider",
+            email: form.email,
+            phone: form.phone,
+            registration_number: null,
+          });
+          await loadProviders();
+        } else {
+          setProviders(prev => [{ id: Date.now(), ...form, radius: Number(form.radius), rating: 0, reviews: 0, technicians: 0, completedJobs: 0, activeJobs: 0, status: "pending", joined: "Mar 2026", responseTime: "N/A" }, ...prev]);
+        }
+        toast({ title: t("providers.created"), description: `${form.name} ${t("providers.created_desc")}` });
       }
-      setProviders(prev => prev.map(p => p.id === editing.id ? { ...p, name: form.name, contact: form.contact, email: form.email, phone: form.phone, city: form.city, radius: Number(form.radius), services: form.services } : p));
-      toast({ title: t("providers.updated"), description: `${form.name} ${t("providers.updated_desc")}` });
-    } else {
-      if (apiBacked) {
-        await createAccount({
-          company_name: form.name,
-          tenant_type: "service_provider",
-          email: form.email,
-          phone: form.phone,
-          registration_number: null,
-        }).catch(() => {
-          toast({ title: t("providers.create_error"), description: "Backend create failed", variant: "destructive" });
-        });
-      }
-      setProviders(prev => [{ id: Date.now(), ...form, radius: Number(form.radius), rating: 0, reviews: 0, technicians: 0, completedJobs: 0, activeJobs: 0, status: "pending", joined: "Mar 2026", responseTime: "N/A" }, ...prev]);
-      toast({ title: t("providers.created"), description: `${form.name} ${t("providers.created_desc")}` });
+      setFormOpen(false);
+    } catch {
+      toast({
+        title: editing ? t("providers.update_error") : t("providers.create_error"),
+        description: editing ? "Backend update failed" : "Backend create failed",
+        variant: "destructive",
+      });
     }
-    setFormOpen(false);
   };
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    if (apiBacked) {
-      await deleteTenant(String(deleteTarget.id)).catch(() => {
-        toast({ title: t("providers.delete_error"), description: "Backend delete failed", variant: "destructive" });
-      });
+    try {
+      if (apiBacked) {
+        await deleteTenant(String(deleteTarget.id));
+        await loadProviders();
+      } else {
+        setProviders(prev => prev.filter(p => p.id !== deleteTarget.id));
+      }
+      toast({ title: t("providers.deleted"), description: `${deleteTarget.name} ${t("providers.deleted_desc")}` });
+      setDeleteTarget(null); setSelected(null);
+    } catch {
+      toast({ title: t("providers.delete_error"), description: "Backend delete failed", variant: "destructive" });
     }
-    setProviders(prev => prev.filter(p => p.id !== deleteTarget.id));
-    toast({ title: t("providers.deleted"), description: `${deleteTarget.name} ${t("providers.deleted_desc")}` });
-    setDeleteTarget(null); setSelected(null);
   };
 
   const renderStars = (rating: number, reviews?: number) => (
