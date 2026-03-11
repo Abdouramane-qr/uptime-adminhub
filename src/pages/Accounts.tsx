@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import EmptyState from "@/components/EmptyState";
 import {
   Search, Download, Eye, Check, X, ChevronLeft, ChevronRight,
-  Building2, Mail, Phone, FileText, Calendar, UserPlus, Pencil, Trash2,
+  Building, Mail, Phone, FileText, Calendar, UserPlus, Pencil, Trash2,
   Smartphone, KeyRound, Copy, RotateCcw,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
@@ -12,11 +12,12 @@ import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { useLanguage } from "@/hooks/useLanguage";
-import { createAccount, deleteTenant, listTeamMembers, listTenants, type TeamMemberDTO, type TenantDTO, updateTenant } from "@/lib/adminPortalClient";
+import { AdminPortalError, createAccount, deleteTenant, listTeamMembers, listTenants, type TeamMemberDTO, type TenantDTO, updateTenant, resetTenantOwnerPassword } from "@/lib/adminPortalClient";
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
 import { reportFallbackHit } from "@/lib/fallbackTelemetry";
 import { useNavigate } from "react-router-dom";
+import { exportToCSV } from "@/lib/exportUtils";
 
 type AccountStatus = "pending" | "approved" | "rejected";
 type AccountType = "SP" | "Fleet";
@@ -25,22 +26,29 @@ interface Account {
   id: string;
   company: string;
   type: AccountType;
+  ownerId?: string;
+  ownerName?: string;
   email: string;
   phone: string;
   regNumber: string;
   submitted: string;
+  approvedAt?: string;
   status: AccountStatus;
+  code?: string;
+  mobileAccessReady: boolean;
 }
 
+const PAGE_SIZE = 10;
+
 const initialAccounts: Account[] = [
-  { id: 1, company: "AutoFix Pro Services", type: "SP", email: "contact@autofixpro.com", phone: "+33 1 42 68 53 00", regNumber: "FR-SP-2024-0142", submitted: "28 Fév 2026", status: "pending" },
-  { id: 2, company: "Metro Fleet Solutions", type: "Fleet", email: "admin@metrofleet.com", phone: "+33 1 55 34 78 12", regNumber: "FR-FM-2024-0088", submitted: "27 Fév 2026", status: "approved" },
-  { id: 3, company: "QuickTow Emergency", type: "SP", email: "ops@quicktow.eu", phone: "+33 6 12 45 78 90", regNumber: "FR-SP-2024-0139", submitted: "26 Fév 2026", status: "rejected" },
-  { id: 4, company: "GreenHaul Logistics", type: "Fleet", email: "fleet@greenhaul.fr", phone: "+33 1 48 92 33 17", regNumber: "FR-FM-2024-0091", submitted: "25 Fév 2026", status: "approved" },
-  { id: 5, company: "RoadStar Repairs", type: "SP", email: "info@roadstar.com", phone: "+33 4 78 63 22 10", regNumber: "FR-SP-2024-0135", submitted: "24 Fév 2026", status: "pending" },
-  { id: 6, company: "CityDrive Fleet Management", type: "Fleet", email: "hello@citydrive.fr", phone: "+33 1 40 20 15 88", regNumber: "FR-FM-2024-0094", submitted: "23 Fév 2026", status: "approved" },
-  { id: 7, company: "TurboMech Garage", type: "SP", email: "service@turbomech.eu", phone: "+33 3 88 45 67 23", regNumber: "FR-SP-2024-0128", submitted: "22 Fév 2026", status: "pending" },
-  { id: 8, company: "TransEurope Carriers", type: "Fleet", email: "dispatch@transeurope.com", phone: "+33 1 53 76 44 90", regNumber: "FR-FM-2024-0097", submitted: "21 Fév 2026", status: "approved" },
+  { id: 1, company: "AutoFix Pro Services", type: "SP", email: "contact@autofixpro.com", phone: "+33 1 42 68 53 00", regNumber: "FR-SP-2024-0142", submitted: "28 Fév 2026", status: "pending", mobileAccessReady: true },
+  { id: 2, company: "Metro Fleet Solutions", type: "Fleet", email: "admin@metrofleet.com", phone: "+33 1 55 34 78 12", regNumber: "FR-FM-2024-0088", submitted: "27 Fév 2026", status: "approved", mobileAccessReady: true },
+  { id: 3, company: "QuickTow Emergency", type: "SP", email: "ops@quicktow.eu", phone: "+33 6 12 45 78 90", regNumber: "FR-SP-2024-0139", submitted: "26 Fév 2026", status: "rejected", mobileAccessReady: true },
+  { id: 4, company: "GreenHaul Logistics", type: "Fleet", email: "fleet@greenhaul.fr", phone: "+33 1 48 92 33 17", regNumber: "FR-FM-2024-0091", submitted: "25 Fév 2026", status: "approved", mobileAccessReady: true },
+  { id: 5, company: "RoadStar Repairs", type: "SP", email: "info@roadstar.com", phone: "+33 4 78 63 22 10", regNumber: "FR-SP-2024-0135", submitted: "24 Fév 2026", status: "pending", mobileAccessReady: true },
+  { id: 6, company: "CityDrive Fleet Management", type: "Fleet", email: "hello@citydrive.fr", phone: "+33 1 40 20 15 88", regNumber: "FR-FM-2024-0094", submitted: "23 Fév 2026", status: "approved", mobileAccessReady: true },
+  { id: 7, company: "TurboMech Garage", type: "SP", email: "service@turbomech.eu", phone: "+33 3 88 45 67 23", regNumber: "FR-SP-2024-0128", submitted: "22 Fév 2026", status: "pending", mobileAccessReady: true },
+  { id: 8, company: "TransEurope Carriers", type: "Fleet", email: "dispatch@transeurope.com", phone: "+33 1 53 76 44 90", regNumber: "FR-FM-2024-0097", submitted: "21 Fév 2026", status: "approved", mobileAccessReady: true },
 ];
 
 const Accounts = () => {
@@ -63,12 +71,16 @@ const Accounts = () => {
       id: String(t.id),
       company: t.company_name || t.company || "N/A",
       type,
+      ownerId: t.owner_id || t.user_id || undefined,
+      ownerName: t.owner_name || t.owner_email || t.email || undefined,
       email: t.owner_email || t.email || "N/A",
       phone: t.phone || "N/A",
       regNumber: t.registration_number || t.reg_number || "N/A",
       submitted: submittedAt ? new Date(submittedAt).toLocaleDateString("fr-FR") : "N/A",
+      approvedAt: t.approved_at ? new Date(t.approved_at).toLocaleDateString("fr-FR") : undefined,
       status,
       code: t.code || undefined,
+      mobileAccessReady: Boolean(t.mobile_access_ready ?? ((t.code || (t.owner_email || t.email)))),
     };
   };
 
@@ -109,6 +121,24 @@ const Accounts = () => {
     const matchStatus = statusFilter === "All" || statusFilter.toLowerCase() === a.status;
     return matchSearch && matchType && matchStatus;
   });
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginatedAccounts = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  const handleExportCSV = () => {
+    const dataToExport = filtered.map(a => ({
+      ID: a.id,
+      Entreprise: a.company,
+      Type: a.type,
+      Email: a.email,
+      Telephone: a.phone,
+      Code: a.code || "",
+      Status: a.status,
+      "Date Soumission": a.submitted,
+      "Numero Inscription": a.regNumber
+    }));
+    exportToCSV(dataToExport, "comptes_uptime");
+    toast({ title: t("common.success"), description: "Fichier CSV généré." });
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -126,6 +156,16 @@ const Accounts = () => {
 
     void load();
   }, [allowFallback]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, typeFilter, statusFilter]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   useEffect(() => {
     if (!drawerOpen || !selectedAccount) {
@@ -226,14 +266,7 @@ const Accounts = () => {
             newAccount = mapTenant(serverItem);
             generatedPassword = serverItem.tempPassword || null;
           } else {
-            // If API succeeded but returned no data (unexpected), create local as fallback
-            newAccount = { 
-              id: String(Date.now()), 
-              ...form, 
-              regNumber: form.regNumber || `FR-${form.type === "SP" ? "SP" : "FM"}-${Date.now()}`, 
-              submitted: new Date().toLocaleDateString("fr-FR"), 
-              status: "pending" 
-            };
+            throw new Error("account_create_missing_item");
           }
         } else {
           // Pure mock mode
@@ -242,7 +275,8 @@ const Accounts = () => {
             ...form, 
             regNumber: form.regNumber || `FR-${form.type === "SP" ? "SP" : "FM"}-${Date.now()}`, 
             submitted: new Date().toLocaleDateString("fr-FR"), 
-            status: "pending" 
+            status: "pending",
+            mobileAccessReady: Boolean(form.email),
           };
           generatedPassword = "MOCK-TEMP-PASS-123";
         }
@@ -258,9 +292,15 @@ const Accounts = () => {
       setFormOpen(false);
     } catch (e) {
       console.error("Save error:", e);
+      const duplicateEmail =
+        e instanceof AdminPortalError
+        && e.httpStatus === 409
+        && e.message.toLowerCase().includes("email");
       toast({
         title: editingAccount ? t("accounts.update_error") : t("accounts.create_error"),
-        description: String((e as { message?: string })?.message || "API error"),
+        description: duplicateEmail
+          ? "Cet email existe deja. Ouvre le compte existant puis utilise 'Reset password' pour le mobile."
+          : String((e as { message?: string })?.message || "API error"),
         variant: "destructive",
       });
     }
@@ -362,11 +402,13 @@ const Accounts = () => {
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-10 px-3 rounded-xl border border-input bg-card text-sm text-foreground focus:border-primary outline-none">
           <option value="All">{t("accounts.filter_all_status")}</option><option value="Pending">{t("status.pending")}</option><option value="Approved">{t("status.approved")}</option><option value="Rejected">{t("status.rejected")}</option>
         </select>
-        <button className="h-10 px-4 rounded-xl border border-input bg-card text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 transition-all flex items-center gap-2">
+        <button 
+          onClick={handleExportCSV}
+          className="h-10 px-4 rounded-xl border border-input bg-card text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 transition-all flex items-center gap-2"
+        >
           <Download className="h-4 w-4" /> {t("accounts.export_csv")}
         </button>
-      </div>
-
+        </div>
       {filtered.length === 0 ? (
         <EmptyState title={t("accounts.no_results")} description={t("accounts.no_results_desc")} actionLabel={t("accounts.reset")}
           onAction={() => { setSearch(""); setTypeFilter("All"); setStatusFilter("All"); }} />
@@ -383,7 +425,7 @@ const Accounts = () => {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((account) => (
+              {paginatedAccounts.map((account) => (
                 <tr key={account.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors group">
                   <td className="px-4 py-3.5"><input type="checkbox" checked={selectedRows.has(account.id)} onChange={() => toggleRow(account.id)} className="h-4 w-4 rounded border-input accent-primary" /></td>
                   <td className="px-4 py-3.5">
@@ -416,13 +458,13 @@ const Accounts = () => {
           </table>
         </div>
         <div className="flex items-center justify-between px-4 py-3.5 border-t border-border">
-          <p className="text-sm text-muted-foreground">{filtered.length} {t("accounts.of")} {accounts.length} {t("accounts.accounts")}</p>
+          <p className="text-sm text-muted-foreground">{paginatedAccounts.length} {t("accounts.of")} {filtered.length} {t("accounts.accounts")}</p>
           <div className="flex items-center gap-1">
             <button onClick={() => setCurrentPage(Math.max(1, currentPage - 1))} className="h-8 px-3 rounded-lg border border-input text-sm text-muted-foreground hover:bg-muted transition-colors flex items-center gap-1"><ChevronLeft className="h-4 w-4" /> {t("accounts.previous")}</button>
-            {[1, 2, 3].map((p) => (
+            {Array.from({ length: totalPages }, (_, index) => index + 1).map((p) => (
               <button key={p} onClick={() => setCurrentPage(p)} className={`h-8 w-8 rounded-lg text-sm font-medium transition-colors ${currentPage === p ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted"}`}>{p}</button>
             ))}
-            <button onClick={() => setCurrentPage(Math.min(3, currentPage + 1))} className="h-8 px-3 rounded-lg border border-input text-sm text-muted-foreground hover:bg-muted transition-colors flex items-center gap-1">{t("accounts.next")} <ChevronRight className="h-4 w-4" /></button>
+            <button onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))} className="h-8 px-3 rounded-lg border border-input text-sm text-muted-foreground hover:bg-muted transition-colors flex items-center gap-1">{t("accounts.next")} <ChevronRight className="h-4 w-4" /></button>
           </div>
         </div>
       </div>
@@ -527,11 +569,14 @@ const Accounts = () => {
                   <TabsTrigger value="documents">{t("accounts.documents_tab")}</TabsTrigger>
                 </TabsList>
                 <TabsContent value="overview" className="p-6 space-y-5 flex-1">
-                  <DetailField icon={Building2} label={t("accounts.company")} value={selectedAccount.company} />
+                  <DetailField icon={Building} label={t("accounts.company")} value={selectedAccount.company} />
+                  <DetailField icon={Smartphone} label="Compte proprietaire" value={selectedAccount.ownerName || "Owner non projete"} />
                   <DetailField icon={Mail} label={t("accounts.email")} value={selectedAccount.email} />
                   <DetailField icon={Phone} label={t("accounts.phone_label")} value={selectedAccount.phone} />
                   <DetailField icon={FileText} label={t("accounts.reg_number")} value={selectedAccount.regNumber} />
                   <DetailField icon={Calendar} label={t("accounts.submission_date")} value={selectedAccount.submitted} />
+                  <DetailField icon={KeyRound} label="Owner user ID" value={selectedAccount.ownerId || "N/A"} />
+                  <DetailField icon={Calendar} label="Date d'activation" value={selectedAccount.approvedAt || "N/A"} />
                   <div>
                     <p className="text-xs text-muted-foreground mb-1">{t("accounts.status")}</p>
                     <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-lg ${statusStyles[selectedAccount.status].bg} ${statusStyles[selectedAccount.status].text}`}>
@@ -540,10 +585,9 @@ const Accounts = () => {
                     </span>
                   </div>
 
-                  {/* Accès Mobile App */}
-                  {selectedAccount.status === "approved" && (
-                    <div className="mt-8 pt-8 border-t border-border">
-                      <div className="bg-primary/5 rounded-2xl border border-primary/10 p-5 space-y-4">
+                  <div className="mt-8 pt-8 border-t border-border">
+                    <div className="bg-primary/5 rounded-2xl border border-primary/10 p-5 space-y-4">
+                      <div className="flex items-start justify-between gap-3">
                         <div className="flex items-center gap-3">
                           <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
                             <Smartphone className="h-5 w-5" />
@@ -553,83 +597,92 @@ const Accounts = () => {
                             <p className="text-[11px] text-muted-foreground">{t("accounts.mobile_access_desc")}</p>
                           </div>
                         </div>
+                        <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-lg ${selectedAccount.mobileAccessReady ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${selectedAccount.mobileAccessReady ? "bg-success" : "bg-warning"}`} />
+                          {selectedAccount.mobileAccessReady ? "Infos disponibles" : "Infos incompletes"}
+                        </span>
+                      </div>
 
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between p-3 bg-card rounded-xl border border-border">
-                            <div className="flex items-center gap-3">
-                              <Building2 className="h-4 w-4 text-muted-foreground" />
-                              <div>
-                                <p className="text-[10px] text-muted-foreground leading-none mb-1">{t("accounts.company_code")}</p>
-                                <p className="text-sm font-bold font-mono text-foreground leading-none">{selectedAccount.code || "N/A"}</p>
-                              </div>
-                            </div>
-                            <button 
-                              onClick={() => {
-                                navigator.clipboard.writeText(selectedAccount.code || "");
-                                toast({ title: t("accounts.copy"), description: "Code copié !" });
-                              }}
-                              className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-
-                          <div className="flex items-center justify-between p-3 bg-card rounded-xl border border-border">
-                            <div className="flex items-center gap-3">
-                              <Mail className="h-4 w-4 text-muted-foreground" />
-                              <div>
-                                <p className="text-[10px] text-muted-foreground leading-none mb-1">{t("accounts.email")}</p>
-                                <p className="text-sm font-medium text-foreground leading-none">{selectedAccount.email}</p>
-                              </div>
-                            </div>
-                            <button 
-                              onClick={() => {
-                                navigator.clipboard.writeText(selectedAccount.email);
-                                toast({ title: t("accounts.copy"), description: "Email copié !" });
-                              }}
-                              className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                            </button>
+                      <div className="flex items-center justify-between p-3 bg-card rounded-xl border border-border">
+                        <div className="flex items-center gap-3">
+                          <Building className="h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <p className="text-[10px] text-muted-foreground leading-none mb-1">{t("accounts.company_code")}</p>
+                            <p className="text-sm font-bold font-mono text-foreground leading-none">{selectedAccount.code || "N/A"}</p>
                           </div>
                         </div>
+                        <button 
+                          onClick={() => {
+                            navigator.clipboard.writeText(selectedAccount.code || "");
+                            toast({ title: t("accounts.copy"), description: "Code copié !" });
+                          }}
+                          className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
 
-                        <div className="flex gap-2">
-                          <Button 
-                            variant="outline" 
-                            className="flex-1 rounded-xl h-10 text-xs font-semibold gap-2 border-primary/20 hover:bg-primary/5 hover:text-primary transition-all"
-                            onClick={() => {
-                              const text = `App: Fleet Rescue\nCode: ${selectedAccount.code}\nEmail: ${selectedAccount.email}`;
-                              navigator.clipboard.writeText(text);
-                              toast({ title: t("accounts.copy_all"), description: t("accounts.credentials_copied") });
-                            }}
-                          >
-                            <Copy className="h-3.5 w-3.5" /> {t("accounts.copy_all")}
-                          </Button>
-                          <Button 
-                            variant="outline" 
-                            className="rounded-xl h-10 w-10 p-0 border-info/20 text-info hover:bg-info/5 hover:text-info transition-all"
-                            title={t("accounts.reset_password")}
-                            onClick={async () => {
-                              if (confirm(t("accounts.reset_password_confirm"))) {
-                                try {
-                                  const newPass = Math.random().toString(36).slice(-8);
-                                  await resetTenantOwnerPassword(selectedAccount.id, newPass);
-                                  setTempPassword(newPass);
-                                  setTempPasswordModalOpen(true);
-                                  toast({ title: t("common.success"), description: t("accounts.updated") });
-                                } catch (e) {
-                                  toast({ title: t("common.error"), description: "Échec de réinitialisation", variant: "destructive" });
-                                }
+                      <div className="grid grid-cols-2 gap-3">
+                        <InfoCard icon={Mail} label={t("accounts.email")} value={selectedAccount.email} />
+                        <InfoCard icon={Phone} label={t("accounts.phone_label")} value={selectedAccount.phone} />
+                        <InfoCard icon={FileText} label={t("accounts.reg_number")} value={selectedAccount.regNumber} />
+                        <InfoCard icon={Smartphone} label="Statut mobile" value={selectedAccount.status === "approved" ? "Autorisable" : "En attente workflow"} />
+                      </div>
+
+                      <div className="flex items-center justify-between p-3 bg-card rounded-xl border border-border">
+                        <div className="flex items-center gap-3">
+                          <Mail className="h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <p className="text-[10px] text-muted-foreground leading-none mb-1">{t("accounts.email")}</p>
+                            <p className="text-sm font-medium text-foreground leading-none">{selectedAccount.email}</p>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => {
+                            navigator.clipboard.writeText(selectedAccount.email);
+                            toast({ title: t("accounts.copy"), description: "Email copié !" });
+                          }}
+                          className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <Button 
+                          variant="outline" 
+                          className="flex-1 rounded-xl h-10 text-xs font-semibold gap-2 border-primary/20 hover:bg-primary/5 hover:text-primary transition-all"
+                          onClick={() => {
+                            const text = `App: Fleet Rescue\nCode: ${selectedAccount.code || "N/A"}\nEmail: ${selectedAccount.email}\nPhone: ${selectedAccount.phone}\nRegistration: ${selectedAccount.regNumber}`;
+                            navigator.clipboard.writeText(text);
+                            toast({ title: t("accounts.copy_all"), description: t("accounts.credentials_copied") });
+                          }}
+                        >
+                          <Copy className="h-3.5 w-3.5" /> {t("accounts.copy_all")}
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          className="rounded-xl h-10 w-10 p-0 border-info/20 text-info hover:bg-info/5 hover:text-info transition-all"
+                          title={t("accounts.reset_password")}
+                          onClick={async () => {
+                            if (confirm(t("accounts.reset_password_confirm"))) {
+                              try {
+                                const newPass = Math.random().toString(36).slice(-12);
+                                await resetTenantOwnerPassword(selectedAccount.id, newPass);
+                                setTempPassword(newPass);
+                                setTempPasswordModalOpen(true);
+                                toast({ title: t("common.success"), description: t("accounts.updated") });
+                              } catch {
+                                toast({ title: t("common.error"), description: "Échec de réinitialisation", variant: "destructive" });
                               }
-                            }}
-                          >
-                            <RotateCcw className="h-4 w-4" />
-                          </Button>
-                        </div>
+                            }
+                          }}
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                        </Button>
                       </div>
                     </div>
-                  )}
+                  </div>
                 </TabsContent>
                 <TabsContent value="technicians" className="p-6">
                   {loadingTeamMembers ? (
@@ -683,6 +736,16 @@ const DetailField = ({ icon: Icon, label, value }: { icon: React.ElementType; la
   <div className="flex items-start gap-3">
     <div className="h-9 w-9 rounded-xl bg-muted flex items-center justify-center shrink-0"><Icon className="h-4 w-4 text-muted-foreground" /></div>
     <div><p className="text-xs text-muted-foreground">{label}</p><p className="text-sm font-medium text-foreground">{value}</p></div>
+  </div>
+);
+
+const InfoCard = ({ icon: Icon, label, value }: { icon: React.ElementType; label: string; value: string }) => (
+  <div className="p-3 bg-card rounded-xl border border-border">
+    <div className="flex items-center gap-2 mb-1">
+      <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+      <p className="text-[10px] text-muted-foreground leading-none">{label}</p>
+    </div>
+    <p className="text-sm font-medium text-foreground break-words">{value}</p>
   </div>
 );
 

@@ -30,7 +30,8 @@ const mockInvoices: Invoice[] = [
   { id: "INV-0494", date: "2026-03-01", client: "GreenHaul Logistics", provider: "AutoFix Pro", interventionId: "INT-0394", amount: 560, commission: 84, status: "paid" },
 ];
 
-const formatCurrency = (v: number) => `${v.toFixed(2)} €`;
+const formatCurrency = (v: number) =>
+  `${v.toLocaleString("fr-FR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })} XOF`;
 
 const Billing = () => {
   const { t } = useLanguage();
@@ -111,7 +112,7 @@ const Billing = () => {
     const data = invoices.map(i => ({
       [t("billing.invoice_id")]: i.id, [t("billing.date")]: i.date, [t("billing.client")]: i.client,
       [t("billing.provider")]: i.provider, [t("billing.intervention")]: i.interventionId,
-      [t("billing.amount")]: i.amount.toFixed(2), [t("billing.commission")]: i.commission.toFixed(2),
+      [t("billing.amount")]: formatCurrency(i.amount), [t("billing.commission")]: formatCurrency(i.commission),
       [t("billing.status")]: paymentStatusConfig[i.status].label,
     }));
     exportCSV(data, "factures");
@@ -120,7 +121,7 @@ const Billing = () => {
 
   const handleExportPDF = () => {
     const headers = [t("billing.invoice_id"), t("billing.date"), t("billing.client"), t("billing.provider"), t("billing.amount"), t("billing.commission"), t("billing.status")];
-    const rows = invoices.map(i => [i.id, i.date, i.client, i.provider, `${i.amount.toFixed(2)} €`, `${i.commission.toFixed(2)} €`, paymentStatusConfig[i.status].label]);
+    const rows = invoices.map(i => [i.id, i.date, i.client, i.provider, formatCurrency(i.amount), formatCurrency(i.commission), paymentStatusConfig[i.status].label]);
     exportPDF("Factures — Fleet Rescue", headers, rows, "factures-rapport");
     toast({ title: t("billing.pdf_title"), description: t("billing.pdf_desc") });
   };

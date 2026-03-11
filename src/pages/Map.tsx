@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { mockProviders } from "@/data/mockProviders";
@@ -22,7 +22,7 @@ const Map = () => {
   const [providers, setProviders] = useState<ProviderPosition[]>(allowFallback ? mockProviders : []);
   const [apiBacked, setApiBacked] = useState(false);
 
-  const loadProviders = async () => {
+  const loadProviders = useCallback(async () => {
     const mapStatus = (row: ProviderPresenceDTO): MissionStatus => {
       const s = String(row.status || "").toLowerCase();
       if (s === "pending" || s === "assigned" || s === "en_route" || s === "arrived" || s === "in_progress" || s === "completed") {
@@ -32,7 +32,7 @@ const Map = () => {
     };
 
     const mapProvider = (row: ProviderPresenceDTO): ProviderPosition => ({
-      id: String(row.provider_id || row.id || `provider-${Math.random().toString(36).slice(2, 8)}`),
+      id: String(row.provider_id || row.id || `provider-${crypto.randomUUID().slice(0, 8)}`),
       name: row.display_name || row.name || "Provider",
       status: mapStatus(row),
       lat: Number(row.lat) || 48.8566,
@@ -51,11 +51,11 @@ const Map = () => {
       reportFallbackHit("Map");
       if (!allowFallback) setProviders([]);
     }
-  };
+  }, [allowFallback]);
 
   useEffect(() => {
-    loadProviders();
-  }, [allowFallback]);
+    void loadProviders();
+  }, [loadProviders]);
 
   useEffect(() => {
     if (!apiBacked) return;
@@ -63,21 +63,14 @@ const Map = () => {
     const channel = supabase
       .channel('map_provider_presence')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'provider_presence' }, () => {
-        loadProviders();
+        void loadProviders();
       })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [apiBacked]);
-
-  useEffect(() => {
-    console.log("Map Providers loaded:", providers.length);
-    if (providers.length > 0) {
-      console.log("First provider position:", providers[0].lat, providers[0].lng);
-    }
-  }, [providers]);
+  }, [apiBacked, loadProviders]);
 
   const toggleFilter = (status: MissionStatus) => {
     setActiveFilters((prev) => {

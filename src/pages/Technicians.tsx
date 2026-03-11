@@ -10,6 +10,7 @@ import { listTechnicians, type TechnicianDTO } from "@/lib/adminPortalClient";
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
 import { reportFallbackHit } from "@/lib/fallbackTelemetry";
+import { loadApprovedSpProjection } from "@/lib/onboardingResourceProjection";
 
 type TechStatus = "online" | "offline" | "on_job";
 
@@ -51,7 +52,10 @@ const Technicians = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const techniciansRows = await listTechnicians();
+        const [techniciansRows, onboardingProjection] = await Promise.all([
+          listTechnicians(),
+          loadApprovedSpProjection().catch(() => ({ byCompanyName: new Map(), technicians: [] })),
+        ]);
         const mapped = techniciansRows.map((row: TechnicianDTO, idx): Technician => ({
           id: row.id || `T${String(idx + 1).padStart(3, "0")}`,
           name: row.name || `Technicien ${idx + 1}`,
@@ -65,6 +69,26 @@ const Technicians = () => {
           currentMission: row.current_mission,
           joinedAt: row.joined_at || "N/A",
         }));
+        const existingKeys = new Set(
+          mapped.map((tech) => `${tech.provider.toLowerCase()}::${tech.name.toLowerCase()}`),
+        );
+        onboardingProjection.technicians.forEach((tech, idx) => {
+          const key = `${tech.provider.toLowerCase()}::${tech.name.toLowerCase()}`;
+          if (existingKeys.has(key)) return;
+          mapped.push({
+            id: tech.id || `ONB-T${String(idx + 1).padStart(3, "0")}`,
+            name: tech.name,
+            provider: tech.provider,
+            status: "offline",
+            phone: tech.phone,
+            location: "Onboarding approuve",
+            completedInterventions: 0,
+            rating: 4.5,
+            specialties: tech.skill ? [tech.skill] : ["Assistance routière"],
+            currentMission: undefined,
+            joinedAt: "Onboarding",
+          });
+        });
         setTechnicians(mapped);
         setApiBacked(true);
       } catch {

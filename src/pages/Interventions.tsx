@@ -75,6 +75,14 @@ interface ProviderOption {
   name: string;
 }
 
+const hasValidCoordinates = (coords: { lat: number; lng: number } | null) => {
+  if (!coords) return false;
+  if (!Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) return false;
+  if (coords.lat < -90 || coords.lat > 90 || coords.lng < -180 || coords.lng > 180) return false;
+  if (Math.abs(coords.lat) < 0.000001 && Math.abs(coords.lng) < 0.000001) return false;
+  return true;
+};
+
 const fullTimeline = (status: InterventionStatus, dates: Record<string, string>, labels: Record<string, string>): TimelineStep[] => {
   const steps: { key: string; labelKey: string; icon: React.ElementType }[] = [
     { key: "created", labelKey: "created", icon: Circle },
@@ -309,10 +317,17 @@ const Interventions = () => {
       const type = String(tenant.tenant_type || tenant.type || "").toLowerCase();
       return type.includes("fleet");
     };
-    const mapProviderOption = (row: ProviderPresenceDTO): ProviderOption => ({
-      id: String(row.provider_id || row.id || ""),
-      name: row.display_name || row.name || "Provider",
-    });
+    const mapProviderOption = (row: ProviderPresenceDTO): ProviderOption | null => {
+      const providerId = String(row.provider_id || "").trim();
+      if (!providerId || row.assignable === false) {
+        return null;
+      }
+
+      return {
+        id: providerId,
+        name: row.display_name || row.name || "Provider",
+      };
+    };
 
     const load = async () => {
       try {
@@ -334,7 +349,7 @@ const Interventions = () => {
         setServiceProviderOptions(
           providers
             .map(mapProviderOption)
-            .filter((provider) => provider.id.trim().length > 0),
+            .filter((provider): provider is ProviderOption => provider !== null),
         );
         setApiBacked(true);
       } catch (e) {
@@ -407,18 +422,17 @@ const Interventions = () => {
     
     try {
       if (apiBacked || !allowFallback) {
-        // Strict coordinate requirement from backend
-        const lat = parsedCoords?.lat ?? 0;
-        const lng = parsedCoords?.lng ?? 0;
-
-        if (locationType === "gps" && !parsedCoords) {
+        if (!hasValidCoordinates(parsedCoords)) {
           toast({ 
-            title: "Format GPS incorrect", 
-            description: "Utilisez le format 'Latitude, Longitude' (ex: 48.85, 2.35)", 
+            title: "Coordonnees requises", 
+            description: "Utilisez une position GPS valide au format 'Latitude, Longitude' ou le bouton de geolocalisation.", 
             variant: "destructive" 
           });
           return;
         }
+
+        const lat = parsedCoords.lat;
+        const lng = parsedCoords.lng;
 
         const created = await createServiceRequest({
           service_type: form.serviceType,

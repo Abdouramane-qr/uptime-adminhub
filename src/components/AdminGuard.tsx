@@ -10,7 +10,7 @@ interface AdminGuardProps {
 
 const AdminGuard = ({ children }: AdminGuardProps) => {
   const { user, loading } = useAuth();
-  const { roles, loading: rolesLoading } = useRole();
+  const { roles, loading: rolesLoading, hasAnyRole } = useRole();
 
   if (loading || rolesLoading) {
     return (
@@ -25,6 +25,10 @@ const AdminGuard = ({ children }: AdminGuardProps) => {
   }
 
   if (roles.length === 0) {
+    return <Navigate to="/pending-access" replace />;
+  }
+
+  if (!hasAnyRole("admin", "moderator")) {
     return <Navigate to="/pending-access" replace />;
   }
 

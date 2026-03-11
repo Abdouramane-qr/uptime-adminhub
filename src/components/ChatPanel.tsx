@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Send, User, Bot, Loader2 } from "lucide-react";
 import { 
   listMessages, 
@@ -28,7 +28,7 @@ const ChatPanel = ({ requestId, customerName, providerName }: ChatPanelProps) =>
   const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const loadMessages = async () => {
+  const loadMessages = useCallback(async () => {
     try {
       const data = await listMessages(requestId);
       setMessages(data);
@@ -37,18 +37,18 @@ const ChatPanel = ({ requestId, customerName, providerName }: ChatPanelProps) =>
     } finally {
       setLoading(false);
     }
-  };
+  }, [requestId]);
 
   useEffect(() => {
-    loadMessages();
+    void loadMessages();
     const subscription = subscribeMessages(requestId, () => {
-      loadMessages();
+      void loadMessages();
     });
 
     return () => {
       subscription.unsubscribe();
     };
-  }, [requestId]);
+  }, [requestId, loadMessages]);
 
   useEffect(() => {
     if (scrollRef.current) {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { mockProviders } from "@/data/mockProviders";
@@ -25,6 +25,7 @@ import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
 import { reportFallbackHit } from "@/lib/fallbackTelemetry";
 import {
+  AdminPortalError,
   listProviderPresence,
   listServiceRequests,
   type ProviderPresenceDTO,
@@ -46,6 +47,10 @@ interface DispatchIntervention {
   createdAt: Date;
   assignedProvider?: string;
   urgency: "normal" | "high" | "critical";
+}
+
+interface DispatchProviderPosition extends ProviderPosition {
+  backendProviderId?: string;
 }
 
 const initialInterventions: DispatchIntervention[] = [
@@ -84,7 +89,7 @@ const Dispatch = () => {
 
   const [interventions, setInterventions] = useState<DispatchIntervention[]>(allowFallback ? initialInterventions : []);
   const [apiBacked, setApiBacked] = useState(false);
-  const [providers, setProviders] = useState<ProviderPosition[]>(allowFallback ? mockProviders : []);
+  const [providers, setProviders] = useState<DispatchProviderPosition[]>(allowFallback ? mockProviders : []);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<InterventionStatus | "all">("all");
   const [selectedIntervention, setSelectedIntervention] = useState<DispatchIntervention | null>(null);
@@ -92,7 +97,7 @@ const Dispatch = () => {
   const [assignProvider, setAssignProvider] = useState("");
   const [selectedMapProvider, setSelectedMapProvider] = useState<ProviderPosition | null>(null);
 
-  const loadInterventions = async () => {
+  const loadInterventions = useCallback(async () => {
     const extractDetail = (details: string | undefined, label: string) => {
       if (!details) return null;
       const part = details.split("|").map((item) => item.trim()).find((item) => item.toLowerCase().startsWith(`${label.toLowerCase()}:`));
@@ -137,9 +142,9 @@ const Dispatch = () => {
       reportFallbackHit("Dispatch:interventions");
       if (!allowFallback) setInterventions([]);
     }
-  };
+  }, [allowFallback]);
 
-  const loadProviders = async () => {
+  const loadProviders = useCallback(async () => {
     const mapStatus = (row: ProviderPresenceDTO): MissionStatus => {
       const s = String(row.status || "").toLowerCase();
       if (s === "pending" || s === "assigned" || s === "en_route" || s === "arrived" || s === "in_progress" || s === "completed") {
@@ -148,30 +153,38 @@ const Dispatch = () => {
       return row.is_available ? "pending" : "in_progress";
     };
 
-    const mapProvider = (row: ProviderPresenceDTO): ProviderPosition => ({
-      id: String(row.provider_id || row.id || `provider-${Math.random().toString(36).slice(2, 8)}`),
-      name: row.display_name || row.name || "Provider",
-      status: mapStatus(row),
-      lat: Number(row.lat) || 48.8566,
-      lng: Number(row.lng) || 2.3522,
-      phone: row.phone || "N/A",
-      currentMission: null,
-      completedMissions: 0,
-    });
+    const mapProvider = (row: ProviderPresenceDTO): DispatchProviderPosition | null => {
+      const providerId = String(row.provider_id || "").trim();
+      if (!providerId || row.assignable === false) {
+        return null;
+      }
+
+      return {
+        id: providerId,
+        backendProviderId: providerId,
+        name: row.display_name || row.name || "Provider",
+        status: mapStatus(row),
+        lat: Number(row.lat) || 48.8566,
+        lng: Number(row.lng) || 2.3522,
+        phone: row.phone || "N/A",
+        currentMission: null,
+        completedMissions: 0,
+      };
+    };
 
     try {
       const rows = await listProviderPresence();
-      setProviders(rows.map(mapProvider));
+      setProviders(rows.map(mapProvider).filter((provider): provider is DispatchProviderPosition => provider !== null));
     } catch {
       reportFallbackHit("Dispatch:providers");
       if (!allowFallback) setProviders([]);
     }
-  };
+  }, [allowFallback]);
 
   useEffect(() => {
-    loadInterventions();
-    loadProviders();
-  }, [allowFallback]);
+    void loadInterventions();
+    void loadProviders();
+  }, [loadInterventions, loadProviders]);
 
   useEffect(() => {
     if (!apiBacked) return;
@@ -179,14 +192,14 @@ const Dispatch = () => {
     const srChannel = supabase
       .channel('dispatch_service_requests')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'service_requests' }, () => {
-        loadInterventions();
+        void loadInterventions();
       })
       .subscribe();
 
     const ppChannel = supabase
       .channel('dispatch_provider_presence')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'provider_presence' }, () => {
-        loadProviders();
+        void loadProviders();
       })
       .subscribe();
 
@@ -194,7 +207,7 @@ const Dispatch = () => {
       supabase.removeChannel(srChannel);
       supabase.removeChannel(ppChannel);
     };
-  }, [apiBacked]);
+  }, [apiBacked, loadInterventions, loadProviders]);
 
   const availableProviders = useMemo(
     () => providers.filter((p) => p.status === "pending" || p.status === "completed"),
@@ -220,19 +233,24 @@ const Dispatch = () => {
     return [12.3714, -1.5197] as [number, number]; // Default to Ouagadougou
   }, [filtered, providers]);
 
-  useEffect(() => {
-    console.log("Dispatch data - Interventions:", filtered.length, "Providers:", providers.length);
-  }, [filtered, providers]);
-
   const handleAssign = async () => {
     if (!selectedIntervention || !assignProvider) return;
     const selectedProvider = providers.find((provider) => provider.id === assignProvider);
+    const backendProviderId = selectedProvider?.backendProviderId || assignProvider;
+    if (!selectedProvider || !backendProviderId.trim()) {
+      toast({
+        title: t("dispatch.update_error"),
+        description: "Le prestataire selectionne ne possede pas d'identifiant backend valide.",
+        variant: "destructive",
+      });
+      return;
+    }
     const assignedProviderName = selectedProvider?.name || assignProvider;
     try {
       if (apiBacked) {
         await updateServiceRequestStatus(selectedIntervention.id, {
           status: "assigned",
-          assigned_provider_id: assignProvider,
+          assigned_provider_id: backendProviderId,
         });
       }
       setInterventions(prev => prev.map(i =>
@@ -244,8 +262,17 @@ const Dispatch = () => {
       setAssignOpen(false);
       setAssignProvider("");
       setSelectedIntervention(null);
-    } catch {
-      toast({ title: t("dispatch.update_error"), description: t("dispatch.update_error_desc"), variant: "destructive" });
+    } catch (error) {
+      const invalidProvider =
+        error instanceof AdminPortalError
+        && error.message.toLowerCase().includes("invalid_assigned_provider");
+      toast({
+        title: t("dispatch.update_error"),
+        description: invalidProvider
+          ? "Le prestataire visible n'est pas encore raccorde comme owner SP actif. Verifie son onboarding/profil avant assignation."
+          : String((error as { message?: string })?.message || t("dispatch.update_error_desc")),
+        variant: "destructive",
+      });
     }
   };
 
@@ -260,8 +287,12 @@ const Dispatch = () => {
       }
       setInterventions(prev => prev.map(i => i.id === intervention.id ? { ...i, status: next } : i));
       toast({ title: t("dispatch.status_updated"), description: `${intervention.id} → ${statusConfig[next].label}` });
-    } catch {
-      toast({ title: t("dispatch.update_error"), description: t("dispatch.update_error_desc"), variant: "destructive" });
+    } catch (error) {
+      toast({
+        title: t("dispatch.update_error"),
+        description: String((error as { message?: string })?.message || t("dispatch.update_error_desc")),
+        variant: "destructive",
+      });
     }
   };
 

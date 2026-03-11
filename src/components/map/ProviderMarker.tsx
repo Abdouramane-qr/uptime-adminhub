@@ -28,9 +28,17 @@ interface Props {
 const ProviderMarker = ({ provider, onSelect }: Props) => {
   const config = STATUS_CONFIG[provider.status];
 
+  // Validate coordinates
+  const lat = Number(provider.lat);
+  const lng = Number(provider.lng);
+
+  if (isNaN(lat) || lat === 0 || isNaN(lng) || lng === 0) {
+    return null;
+  }
+
   return (
     <Marker
-      position={[provider.lat, provider.lng]}
+      position={[lat, lng]}
       icon={createIcon(provider.status)}
       eventHandlers={{ click: () => onSelect(provider) }}
     >

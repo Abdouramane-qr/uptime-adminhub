@@ -55,7 +55,7 @@ describe('AdminGuard', () => {
 
   it('redirects to pending-access when user has no assigned role', () => {
     mockUseAuth.mockReturnValue({ user: { id: 'u1' }, loading: false });
-    mockUseRole.mockReturnValue({ roles: [], loading: false });
+    mockUseRole.mockReturnValue({ roles: [], loading: false, hasAnyRole: () => false });
 
     renderWithRouter(
       <AdminGuard>
@@ -68,7 +68,7 @@ describe('AdminGuard', () => {
 
   it('renders children when user has at least one role', () => {
     mockUseAuth.mockReturnValue({ user: { id: 'u1' }, loading: false });
-    mockUseRole.mockReturnValue({ roles: ['moderator'], loading: false });
+    mockUseRole.mockReturnValue({ roles: ['moderator'], loading: false, hasAnyRole: () => true });
 
     renderWithRouter(
       <AdminGuard>
@@ -77,5 +77,18 @@ describe('AdminGuard', () => {
     );
 
     expect(screen.getByText('Admin Content')).toBeInTheDocument();
+  });
+
+  it('redirects to pending-access when user only has non-admin role', () => {
+    mockUseAuth.mockReturnValue({ user: { id: 'u1' }, loading: false });
+    mockUseRole.mockReturnValue({ roles: ['user'], loading: false, hasAnyRole: () => false });
+
+    renderWithRouter(
+      <AdminGuard>
+        <div>Admin Content</div>
+      </AdminGuard>,
+    );
+
+    expect(screen.queryByText('Admin Content')).not.toBeInTheDocument();
   });
 });

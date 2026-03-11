@@ -65,7 +65,7 @@ async function validateSession(activeSession: Session | null): Promise<Session |
 
   const { data, error } = await supabase.auth.getUser(activeSession.access_token);
   if (error || !data.user) {
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: "local" });
     clearCachedSession();
     return null;
   }
@@ -191,14 +191,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const activeSession = data.session ?? (await waitForPersistedSession());
 
     if (!activeSession?.user || !isJwtLikeToken(activeSession.access_token)) {
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: "local" });
       clearCachedSession();
       throw new Error("Session Supabase invalide apres connexion. Reessayez.");
     }
 
     const { data: verifiedUser, error: verifyError } = await supabase.auth.getUser(activeSession.access_token);
     if (verifyError || !verifiedUser.user) {
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: "local" });
       clearCachedSession();
       throw new Error("Jeton Supabase invalide apres connexion. Reessayez.");
     }

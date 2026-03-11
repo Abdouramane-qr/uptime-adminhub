@@ -1,72 +1,199 @@
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
-import {
-  Search,
-  Download,
-  FileDown,
-  Send,
-  CalendarIcon,
-  DollarSign,
-} from "lucide-react";
+import { Search, Download, CalendarIcon, DollarSign, FileText } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import EmptyState from "@/components/EmptyState";
+import { useAuth } from "@/hooks/useAuth";
+import { useSpOnboardingDraft } from "@/hooks/useSpOnboardingDraft";
+import { listBillingInvoices, listServiceRequests, type BillingStatus } from "@/lib/adminPortalClient";
+import { exportCSV, exportPDF } from "@/lib/export";
+import { toast } from "@/hooks/use-toast";
+import DataSourceBadge from "@/components/DataSourceBadge";
 
-type InvoiceStatus = "paid" | "pending" | "overdue";
+type InvoiceStatus = Extract<BillingStatus, "paid" | "pending" | "overdue" | "cancelled">;
 
 interface Invoice {
   id: string;
   client: string;
-  jobs: number;
+  interventionId: string;
   amount: number;
+  commission: number;
   issued: string;
   due: string;
   status: InvoiceStatus;
 }
 
-const invoices: Invoice[] = [
-  { id: "INV-2026-0089", client: "Metro Fleet Solutions", jobs: 5, amount: 2840, issued: "Feb 28, 2026", due: "Mar 15, 2026", status: "pending" },
-  { id: "INV-2026-0088", client: "GreenHaul Logistics", jobs: 3, amount: 1560, issued: "Feb 25, 2026", due: "Mar 10, 2026", status: "paid" },
-  { id: "INV-2026-0087", client: "CityDrive Fleet", jobs: 7, amount: 4120, issued: "Feb 20, 2026", due: "Mar 5, 2026", status: "paid" },
-  { id: "INV-2026-0086", client: "TransEurope Carriers", jobs: 2, amount: 980, issued: "Feb 15, 2026", due: "Feb 28, 2026", status: "overdue" },
-  { id: "INV-2026-0085", client: "Metro Fleet Solutions", jobs: 4, amount: 3200, issued: "Feb 10, 2026", due: "Feb 25, 2026", status: "paid" },
-  { id: "INV-2026-0084", client: "GreenHaul Logistics", jobs: 6, amount: 3640, issued: "Feb 5, 2026", due: "Feb 20, 2026", status: "paid" },
-  { id: "INV-2026-0083", client: "CityDrive Fleet", jobs: 1, amount: 660, issued: "Jan 30, 2026", due: "Feb 14, 2026", status: "overdue" },
-  { id: "INV-2026-0082", client: "TransEurope Carriers", jobs: 8, amount: 4980, issued: "Jan 25, 2026", due: "Feb 10, 2026", status: "paid" },
-  { id: "INV-2026-0081", client: "Metro Fleet Solutions", jobs: 3, amount: 1360, issued: "Jan 20, 2026", due: "Feb 5, 2026", status: "pending" },
-  { id: "INV-2026-0080", client: "GreenHaul Logistics", jobs: 2, amount: 840, issued: "Jan 15, 2026", due: "Jan 30, 2026", status: "paid" },
-];
-
 const statusStyles: Record<InvoiceStatus, { dot: string; bg: string; text: string }> = {
   paid: { dot: "bg-success", bg: "bg-success/10", text: "text-success" },
   pending: { dot: "bg-accent", bg: "bg-accent/10", text: "text-accent" },
   overdue: { dot: "bg-destructive", bg: "bg-destructive/10", text: "text-destructive" },
+  cancelled: { dot: "bg-muted-foreground", bg: "bg-muted", text: "text-muted-foreground" },
 };
 
-const summaryCards = [
-  { title: "Paid", amount: "$18,340", color: "text-success", bg: "bg-success/10", icon: DollarSign },
-  { title: "Pending", amount: "$4,200", color: "text-accent", bg: "bg-accent/10", icon: DollarSign },
-  { title: "Overdue", amount: "$1,640", color: "text-destructive", bg: "bg-destructive/10", icon: DollarSign },
-];
+const normalize = (value: string | undefined | null) => String(value || "").trim().toLowerCase();
 
 const SpInvoices = () => {
+  const { user } = useAuth();
+  const { detail, loading, error } = useSpOnboardingDraft();
   const [search, setSearch] = useState("");
   const [dateFrom, setDateFrom] = useState<Date>();
   const [dateTo, setDateTo] = useState<Date>();
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [loadingInvoices, setLoadingInvoices] = useState(true);
+  const [apiBacked, setApiBacked] = useState(false);
 
-  const filtered = invoices.filter((inv) => {
-    const matchSearch = inv.id.toLowerCase().includes(search.toLowerCase()) || inv.client.toLowerCase().includes(search.toLowerCase());
-    return matchSearch;
-  });
+  const providerId = user?.id || "";
+  const providerName = detail?.onboarding?.company_name || "";
+
+  const loadInvoices = useCallback(async () => {
+    if (!providerId) {
+      setInvoices([]);
+      setLoadingInvoices(false);
+      setApiBacked(false);
+      return;
+    }
+
+    setLoadingInvoices(true);
+    try {
+      const [payload, requests] = await Promise.all([listBillingInvoices(), listServiceRequests()]);
+      const requestIds = new Set(
+        requests
+          .filter((row) => String(row.assigned_provider_id || "").trim() === providerId)
+          .map((row) => row.id),
+      );
+      const scoped = payload.items
+        .filter((item) => {
+          const invoiceProviderId = String(item.provider_id || "").trim();
+          if (invoiceProviderId) {
+            return invoiceProviderId === providerId;
+          }
+          return requestIds.has(String(item.intervention_id || ""));
+        })
+        .map((item): Invoice => {
+          const amount = Number(item.amount ?? 0) || 0;
+          const commission = Number(item.commission ?? 0) || 0;
+          const issued = item.date || new Date().toISOString().slice(0, 10);
+          const dueDate = new Date(issued);
+          dueDate.setDate(dueDate.getDate() + 15);
+
+          return {
+            id: item.id,
+            client: item.client || "Client",
+            interventionId: item.intervention_id || "N/A",
+            amount,
+            commission,
+            issued,
+            due: dueDate.toISOString().slice(0, 10),
+            status: (item.status as InvoiceStatus) || "pending",
+          };
+        });
+
+      setInvoices(scoped);
+      setApiBacked(true);
+    } catch (err) {
+      console.error("Failed to load SP invoices:", err);
+      setInvoices([]);
+      setApiBacked(false);
+      toast({
+        title: "Invoices unavailable",
+        description: String((err as { message?: string })?.message || "Unable to load provider invoices."),
+        variant: "destructive",
+      });
+    } finally {
+      setLoadingInvoices(false);
+    }
+  }, [providerId]);
+
+  useEffect(() => {
+    void loadInvoices();
+  }, [loadInvoices]);
+
+  const filtered = useMemo(() => {
+    return invoices.filter((invoice) => {
+      const issuedDate = new Date(invoice.issued);
+      const matchSearch =
+        invoice.id.toLowerCase().includes(search.toLowerCase()) ||
+        invoice.client.toLowerCase().includes(search.toLowerCase()) ||
+        invoice.interventionId.toLowerCase().includes(search.toLowerCase());
+      const matchFrom = !dateFrom || issuedDate >= dateFrom;
+      const matchTo = !dateTo || issuedDate <= dateTo;
+      return matchSearch && matchFrom && matchTo;
+    });
+  }, [dateFrom, dateTo, invoices, search]);
+
+  const totals = useMemo(() => {
+    return filtered.reduce(
+      (acc, invoice) => {
+        if (invoice.status === "paid") acc.paid += invoice.amount - invoice.commission;
+        if (invoice.status === "pending") acc.pending += invoice.amount;
+        if (invoice.status === "overdue") acc.overdue += invoice.amount;
+        return acc;
+      },
+      { paid: 0, pending: 0, overdue: 0 },
+    );
+  }, [filtered]);
+
+  const handleExportCSV = () => {
+    exportCSV(
+      filtered.map((invoice) => ({
+        Invoice: invoice.id,
+        Client: invoice.client,
+        Intervention: invoice.interventionId,
+        Amount: invoice.amount.toFixed(2),
+        Commission: invoice.commission.toFixed(2),
+        Issued: invoice.issued,
+        Due: invoice.due,
+        Status: invoice.status,
+      })),
+      "sp-invoices",
+    );
+    toast({ title: "CSV export", description: "Invoices exported to CSV." });
+  };
+
+  const handleExportPDF = () => {
+    exportPDF(
+      `Invoices - ${providerName}`,
+      ["Invoice", "Client", "Intervention", "Amount", "Commission", "Issued", "Due", "Status"],
+      filtered.map((invoice) => [
+        invoice.id,
+        invoice.client,
+        invoice.interventionId,
+        invoice.amount.toFixed(2),
+        invoice.commission.toFixed(2),
+        invoice.issued,
+        invoice.due,
+        invoice.status,
+      ]),
+      "sp-invoices",
+    );
+    toast({ title: "PDF export", description: "Invoices exported to PDF." });
+  };
+
+  if (loading || loadingInvoices) {
+    return <div className="h-64 rounded-xl bg-muted animate-pulse" />;
+  }
+
+  if (error) {
+    return <EmptyState title="Invoices unavailable" description={error} />;
+  }
+
+  if (!detail?.onboarding) {
+    return <EmptyState title="No SP record" description="Complete the onboarding flow before viewing invoices." />;
+  }
 
   return (
     <div className="space-y-5 animate-fade-in">
-      {/* Top */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold text-foreground">Invoices</h1>
-          <span className="bg-accent/15 text-accent text-xs font-semibold px-2.5 py-1 rounded-full">Total: $24,180</span>
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Invoices</h1>
+            <p className="text-sm text-muted-foreground mt-1 flex items-center gap-2">
+              <span>{providerName}</span>
+              <DataSourceBadge backend={apiBacked} fallbackAllowed={false} />
+            </p>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative">
@@ -75,73 +202,68 @@ const SpInvoices = () => {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search invoices..."
-              className="h-9 pl-9 pr-4 rounded-lg border border-input bg-card text-sm text-foreground placeholder:text-muted-foreground focus:border-accent focus:ring-2 focus:ring-accent/20 outline-none w-52"
+              className="h-9 pl-9 pr-4 rounded-lg border border-input bg-card text-sm text-foreground placeholder:text-muted-foreground focus:border-accent focus:ring-2 focus:ring-accent/20 outline-none w-56"
             />
           </div>
           <DatePicker label="From" date={dateFrom} onChange={setDateFrom} />
           <DatePicker label="To" date={dateTo} onChange={setDateTo} />
-          <button className="h-9 px-4 rounded-lg bg-accent text-accent-foreground text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2">
+          <button onClick={handleExportCSV} className="h-9 px-4 rounded-lg border border-input bg-card text-sm font-medium hover:bg-muted transition-colors flex items-center gap-2">
             <Download className="h-4 w-4" />
-            Export CSV
+            CSV
+          </button>
+          <button onClick={handleExportPDF} className="h-9 px-4 rounded-lg bg-accent text-accent-foreground text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2">
+            <FileText className="h-4 w-4" />
+            PDF
           </button>
         </div>
       </div>
 
-      {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {summaryCards.map((card) => (
+        {[
+          { title: "Paid", amount: totals.paid, color: "text-success", bg: "bg-success/10" },
+          { title: "Pending", amount: totals.pending, color: "text-accent", bg: "bg-accent/10" },
+          { title: "Overdue", amount: totals.overdue, color: "text-destructive", bg: "bg-destructive/10" },
+        ].map((card) => (
           <div key={card.title} className="bg-card rounded-xl shadow-sm border border-border p-5 flex items-center gap-4">
             <div className={`h-10 w-10 rounded-xl flex items-center justify-center ${card.bg}`}>
-              <card.icon className={`h-5 w-5 ${card.color}`} />
+              <DollarSign className={`h-5 w-5 ${card.color}`} />
             </div>
             <div>
               <p className="text-sm text-muted-foreground">{card.title}</p>
-              <p className={`text-xl font-bold ${card.color}`}>{card.amount}</p>
+              <p className={`text-xl font-bold ${card.color}`}>{card.amount.toLocaleString()} XOF</p>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Table */}
       {filtered.length === 0 ? (
-        <EmptyState title="No invoices found" description="Try adjusting your search or date range" actionLabel="Clear filters" onAction={() => setSearch("")} />
+        <EmptyState title="No invoices found" description="No provider invoice matches your filters." actionLabel="Clear filters" onAction={() => { setSearch(""); setDateFrom(undefined); setDateTo(undefined); }} />
       ) : (
         <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-border bg-muted/50">
-                  {["Invoice #", "Client", "Jobs", "Amount", "Issued", "Due Date", "Status", "Actions"].map((h) => (
-                    <th key={h} className="text-left text-xs font-medium text-muted-foreground px-4 py-3 whitespace-nowrap">{h}</th>
+                  {["Invoice #", "Client", "Intervention", "Amount", "Commission", "Issued", "Due Date", "Status"].map((header) => (
+                    <th key={header} className="text-left text-xs font-medium text-muted-foreground px-4 py-3 whitespace-nowrap">{header}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((inv) => (
-                  <tr key={inv.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
-                    <td className="px-4 py-3 text-sm font-medium text-primary">{inv.id}</td>
-                    <td className="px-4 py-3 text-sm text-foreground">{inv.client}</td>
-                    <td className="px-4 py-3 text-sm text-muted-foreground">{inv.jobs}</td>
-                    <td className="px-4 py-3 text-sm font-medium text-foreground">${inv.amount.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{inv.issued}</td>
-                    <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{inv.due}</td>
+                {filtered.map((invoice) => (
+                  <tr key={invoice.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
+                    <td className="px-4 py-3 text-sm font-medium text-primary">{invoice.id}</td>
+                    <td className="px-4 py-3 text-sm text-foreground">{invoice.client}</td>
+                    <td className="px-4 py-3 text-sm text-muted-foreground">{invoice.interventionId}</td>
+                    <td className="px-4 py-3 text-sm font-medium text-foreground">{invoice.amount.toLocaleString()} XOF</td>
+                    <td className="px-4 py-3 text-sm text-muted-foreground">{invoice.commission.toLocaleString()} XOF</td>
+                    <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{invoice.issued}</td>
+                    <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">{invoice.due}</td>
                     <td className="px-4 py-3">
-                      <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full capitalize ${statusStyles[inv.status].bg} ${statusStyles[inv.status].text}`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${statusStyles[inv.status].dot}`} />
-                        {inv.status}
+                      <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full capitalize ${statusStyles[invoice.status].bg} ${statusStyles[invoice.status].text}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${statusStyles[invoice.status].dot}`} />
+                        {invoice.status}
                       </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1">
-                        <button className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground transition-colors" title="Download PDF">
-                          <FileDown className="h-4 w-4" />
-                        </button>
-                        {inv.status !== "paid" && (
-                          <button className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-accent/10 hover:text-accent transition-colors" title="Send Reminder">
-                            <Send className="h-4 w-4" />
-                          </button>
-                        )}
-                      </div>
                     </td>
                   </tr>
                 ))}

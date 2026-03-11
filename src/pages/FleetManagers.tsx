@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Search, Building2, Truck, Eye, Mail, Phone, MapPin, TrendingUp, Activity, Plus, Pencil, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Search, Building, Truck, Eye, Mail, Phone, MapPin, TrendingUp, Activity, Plus, Pencil, Trash2, Download, Smartphone, FileText, Calendar, Copy, RotateCcw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,6 +15,7 @@ import {
   deleteTenant,
   listServiceRequests,
   listTenants,
+  resetTenantOwnerPassword,
   type ServiceRequestDTO,
   type TenantDTO,
   updateTenant,
@@ -22,9 +23,12 @@ import {
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
 import { reportFallbackHit } from "@/lib/fallbackTelemetry";
+import { exportToCSV } from "@/lib/exportUtils";
+import { loadApprovedFleetProjection } from "@/lib/onboardingResourceProjection";
 
 interface FleetManager {
   id: string | number; company: string; contact: string; email: string; phone: string; city: string;
+  ownerId?: string; ownerName?: string; regNumber: string; code?: string; approvedAt?: string; mobileAccessReady: boolean;
   vehicles: number; activeInterventions: number; totalInterventions: number; status: string;
   joined: string; fleetTypes: string[]; avgMonthly: number;
 }
@@ -41,46 +45,70 @@ const FleetManagers = () => {
   const [editing, setEditing] = useState<FleetManager | null>(null);
   const [form, setForm] = useState({ company: "", contact: "", email: "", phone: "", city: "", vehicles: "0" });
   const [deleteTarget, setDeleteTarget] = useState<FleetManager | null>(null);
+  const [tempPassword, setTempPassword] = useState<string | null>(null);
 
-  const norm = (v: string | undefined) => String(v || "").trim().toLowerCase();
-  const isFleet = (tnt: TenantDTO) => {
-    const k = norm(tnt.tenant_type || tnt.type);
-    return k.includes("fleet");
-  };
-  const isActiveStatus = (s: string | undefined) => {
-    const k = norm(s);
-    return !["completed", "cancelled"].includes(k);
-  };
+  const loadManagers = useCallback(async () => {
+    const norm = (v: string | undefined) => String(v || "").trim().toLowerCase();
+    const isFleet = (tnt: TenantDTO) => {
+      const k = norm(tnt.tenant_type || tnt.type);
+      return k.includes("fleet");
+    };
+    const isActiveStatus = (s: string | undefined) => {
+      const k = norm(s);
+      return !["completed", "cancelled"].includes(k);
+    };
 
-  const loadManagers = async () => {
     try {
-      const [tenants, requests] = await Promise.all([listTenants(), listServiceRequests()]);
-      const agg = new Map<string, { active: number; total: number }>();
+      const [tenants, requests, fleetProjection] = await Promise.all([
+        listTenants(),
+        listServiceRequests(),
+        loadApprovedFleetProjection().catch(() => ({ byCompanyName: new Map() })),
+      ]);
+      const aggByTenantId = new Map<string, { active: number; total: number }>();
+      const aggByName = new Map<string, { active: number; total: number }>();
+      const getBucket = (map: Map<string, { active: number; total: number }>, key: string) => {
+        if (!map.has(key)) map.set(key, { active: 0, total: 0 });
+        return map.get(key)!;
+      };
       requests.forEach((r: ServiceRequestDTO) => {
-        const key = norm(r.fleet_manager || r.client_name || r.client);
-        if (!key) return;
-        if (!agg.has(key)) agg.set(key, { active: 0, total: 0 });
-        const bucket = agg.get(key)!;
-        bucket.total += 1;
-        if (isActiveStatus(r.status)) bucket.active += 1;
+        const tenantId = String(r.customer_tenant_id || "").trim();
+        const nameKey = norm(r.customer_tenant_name || r.fleet_manager || r.client_name || r.client);
+        if (tenantId) {
+          const bucket = getBucket(aggByTenantId, tenantId);
+          bucket.total += 1;
+          if (isActiveStatus(r.status)) bucket.active += 1;
+          return;
+        }
+        if (nameKey) {
+          const bucket = getBucket(aggByName, nameKey);
+          bucket.total += 1;
+          if (isActiveStatus(r.status)) bucket.active += 1;
+        }
       });
 
       const mapped: FleetManager[] = tenants.filter(isFleet).map((tnt) => {
         const company = tnt.company_name || tnt.company || "Fleet";
-        const stats = agg.get(norm(company)) || { active: 0, total: 0 };
+        const stats = aggByTenantId.get(String(tnt.id)) || aggByName.get(norm(company)) || { active: 0, total: 0 };
+        const projection = fleetProjection.byCompanyName.get(norm(company));
         return {
           id: String(tnt.id),
           company,
           contact: tnt.owner_email || "N/A",
           email: tnt.email || tnt.owner_email || "N/A",
           phone: tnt.phone || "N/A",
+          ownerId: tnt.owner_id || tnt.user_id || undefined,
+          ownerName: tnt.owner_name || tnt.owner_email || tnt.email || undefined,
+          regNumber: tnt.registration_number || tnt.reg_number || "N/A",
+          code: tnt.code || undefined,
+          approvedAt: tnt.approved_at ? new Date(tnt.approved_at).toLocaleDateString("fr-FR") : undefined,
+          mobileAccessReady: Boolean(tnt.mobile_access_ready ?? ((tnt.code || (tnt.email || tnt.owner_email)))),
           city: "Backend non raccorde",
-          vehicles: 0,
+          vehicles: projection?.vehicles || 0,
           activeInterventions: stats.active,
           totalInterventions: stats.total,
           status: String(tnt.status || "").toLowerCase().includes("active") ? "active" : "inactive",
           joined: tnt.created_at ? new Date(tnt.created_at).toLocaleDateString("fr-FR") : "N/A",
-          fleetTypes: ["Backend non raccorde"],
+          fleetTypes: projection?.vehicles ? [`${projection.vehicles} vehicules approuves`] : ["Backend non raccorde"],
           avgMonthly: 0,
         };
       });
@@ -92,17 +120,34 @@ const FleetManagers = () => {
       reportFallbackHit("FleetManagers");
       if (!allowFallback) setManagers([]);
     }
-  };
+  }, [allowFallback]);
 
   useEffect(() => {
     void loadManagers();
-  }, [allowFallback]);
+  }, [loadManagers]);
 
   const filtered = managers.filter((f) => {
     const matchSearch = f.company.toLowerCase().includes(search.toLowerCase()) || f.contact.toLowerCase().includes(search.toLowerCase());
     const matchStatus = statusFilter === "all" || f.status === statusFilter;
     return matchSearch && matchStatus;
   });
+
+  const handleExportCSV = () => {
+    const dataToExport = filtered.map(f => ({
+      ID: f.id,
+      Entreprise: f.company,
+      Email: f.email,
+      Telephone: f.phone,
+      Code: f.code || "",
+      "Numero Inscription": f.regNumber,
+      Status: f.status,
+      "Date Inscription": f.joined,
+      Vehicules: f.vehicles,
+      "Interventions Actives": f.activeInterventions
+    }));
+    exportToCSV(dataToExport, "gestionnaires_flotte_uptime");
+    toast({ title: t("common.success"), description: "Fichier CSV généré." });
+  };
 
   const totals = {
     vehicles: managers.reduce((a, f) => a + f.vehicles, 0),
@@ -117,7 +162,7 @@ const FleetManagers = () => {
     if (!form.company || !form.email) { toast({ title: t("fleet.required_fields"), description: t("fleet.required_fields_desc"), variant: "destructive" }); return; }
     try {
       if (editing) {
-        if (apiBacked) {
+        if (apiBacked || !allowFallback) {
           await updateTenant(String(editing.id), {
             company_name: form.company,
             tenant_type: "fleet_manager",
@@ -130,7 +175,7 @@ const FleetManagers = () => {
         }
         toast({ title: t("fleet.updated"), description: `${form.company} ${t("fleet.updated_desc")}` });
       } else {
-        if (apiBacked) {
+        if (apiBacked || !allowFallback) {
           await createAccount({
             company_name: form.company,
             tenant_type: "fleet_manager",
@@ -140,7 +185,7 @@ const FleetManagers = () => {
           });
           await loadManagers();
         } else {
-          setManagers(prev => [{ id: Date.now(), ...form, vehicles: Number(form.vehicles), activeInterventions: 0, totalInterventions: 0, status: "active", joined: "Mar 2026", fleetTypes: ["Utilitaires"], avgMonthly: 0 }, ...prev]);
+          setManagers(prev => [{ id: Date.now(), ...form, ownerName: form.email, regNumber: "N/A", code: undefined, approvedAt: undefined, mobileAccessReady: Boolean(form.email), vehicles: Number(form.vehicles), activeInterventions: 0, totalInterventions: 0, status: "active", joined: "Mar 2026", fleetTypes: ["Utilitaires"], avgMonthly: 0 }, ...prev]);
         }
         toast({ title: t("fleet.created"), description: `${form.company} ${t("fleet.created_desc")}` });
       }
@@ -157,7 +202,7 @@ const FleetManagers = () => {
   const handleDelete = async () => {
     if (!deleteTarget) return;
     try {
-      if (apiBacked) {
+      if (apiBacked || !allowFallback) {
         await deleteTenant(String(deleteTarget.id));
         await loadManagers();
       } else {
@@ -194,6 +239,13 @@ const FleetManagers = () => {
             <SelectTrigger className="w-36 rounded-xl"><SelectValue /></SelectTrigger>
             <SelectContent><SelectItem value="all">{t("fleet.all")}</SelectItem><SelectItem value="active">{t("fleet.active")}</SelectItem><SelectItem value="inactive">{t("fleet.inactive")}</SelectItem></SelectContent>
           </Select>
+          <Button 
+            variant="outline" 
+            className="rounded-xl gap-2 text-muted-foreground hover:text-foreground"
+            onClick={handleExportCSV}
+          >
+            <Download className="h-4 w-4" /> CSV
+          </Button>
           <Button onClick={openCreate} className="rounded-xl gap-2"><Plus className="h-4 w-4" /> {t("fleet.add")}</Button>
         </div>
       </div>
@@ -201,7 +253,7 @@ const FleetManagers = () => {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
           { label: t("fleet.total_vehicles"), value: totals.vehicles, icon: Truck, gradient: "from-primary/10 to-primary/5", iconBg: "bg-primary/15 text-primary" },
-          { label: t("fleet.active_fleets"), value: totals.active, icon: Building2, gradient: "from-success/10 to-success/5", iconBg: "bg-success/15 text-success" },
+          { label: t("fleet.active_fleets"), value: totals.active, icon: Building, gradient: "from-success/10 to-success/5", iconBg: "bg-success/15 text-success" },
           { label: t("fleet.ongoing_interventions"), value: totals.interventions, icon: Activity, gradient: "from-warning/10 to-warning/5", iconBg: "bg-warning/15 text-warning" },
         ].map((s) => (
           <div key={s.label} className="relative overflow-hidden bg-card rounded-2xl border border-border p-5 flex items-center gap-4 hover:shadow-md transition-all">
@@ -302,10 +354,86 @@ const FleetManagers = () => {
                 <div className="space-y-3">
                   <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t("fleet.contact")}</h4>
                   <div className="space-y-2 text-sm text-muted-foreground">
-                    <div className="flex items-center gap-2"><Building2 className="h-4 w-4" /> {selected.contact}</div>
+                    <div className="flex items-center gap-2"><Smartphone className="h-4 w-4" /> {selected.ownerName || "Owner non projete"}</div>
+                    <div className="flex items-center gap-2"><Building className="h-4 w-4" /> {selected.contact}</div>
                     <div className="flex items-center gap-2"><Mail className="h-4 w-4" /> {selected.email}</div>
                     <div className="flex items-center gap-2"><Phone className="h-4 w-4" /> {selected.phone}</div>
+                    <div className="flex items-center gap-2"><FileText className="h-4 w-4" /> {selected.regNumber}</div>
+                    <div className="flex items-center gap-2"><Calendar className="h-4 w-4" /> {selected.approvedAt || selected.joined}</div>
                     <div className="flex items-center gap-2"><MapPin className="h-4 w-4" /> {selected.city}</div>
+                  </div>
+                </div>
+                <Separator />
+                <div className="space-y-3">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Acces mobile</h4>
+                  <div className="rounded-2xl border border-primary/10 bg-primary/5 p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">Identifiants terrain</p>
+                        <p className="text-xs text-muted-foreground">Code, email, telephone et reset mot de passe.</p>
+                      </div>
+                      <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-lg ${selected.mobileAccessReady ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${selected.mobileAccessReady ? "bg-success" : "bg-warning"}`} />
+                        {selected.mobileAccessReady ? "Infos disponibles" : "Infos incompletes"}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <InfoCard icon={Building} label="Code entreprise" value={selected.code || "N/A"} />
+                      <InfoCard icon={Mail} label="Email" value={selected.email} />
+                      <InfoCard icon={Phone} label="Telephone" value={selected.phone} />
+                      <InfoCard icon={FileText} label="Registration no." value={selected.regNumber} />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        className="flex-1 rounded-xl h-10 text-xs font-semibold gap-2 border-primary/20 hover:bg-primary/5 hover:text-primary transition-all"
+                        onClick={() => {
+                          const text = `App: Fleet Rescue\nCode: ${selected.code || "N/A"}\nEmail: ${selected.email}\nPhone: ${selected.phone}\nRegistration: ${selected.regNumber}`;
+                          navigator.clipboard.writeText(text);
+                          toast({ title: t("common.success"), description: "Acces mobile copie." });
+                        }}
+                      >
+                        <Copy className="h-3.5 w-3.5" /> Copier
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="rounded-xl h-10 w-10 p-0 border-info/20 text-info hover:bg-info/5 hover:text-info transition-all"
+                        title="Reinitialiser mot de passe"
+                        onClick={async () => {
+                          if (confirm("Reinitialiser le mot de passe du compte proprietaire ?")) {
+                            try {
+                              const newPass = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+                              await resetTenantOwnerPassword(String(selected.id), newPass);
+                              setTempPassword(newPass);
+                              toast({ title: t("common.success"), description: "Nouveau mot de passe genere." });
+                            } catch {
+                              toast({ title: t("common.error"), description: "Echec de reinitialisation", variant: "destructive" });
+                            }
+                          }
+                        }}
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    {tempPassword && (
+                      <div className="rounded-xl border border-border bg-card p-3 flex items-center justify-between">
+                        <div>
+                          <p className="text-[10px] text-muted-foreground mb-1">Mot de passe temporaire</p>
+                          <code className="text-sm font-bold font-mono tracking-wider">{tempPassword}</code>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="rounded-lg"
+                          onClick={() => {
+                            navigator.clipboard.writeText(tempPassword);
+                            toast({ title: t("common.success"), description: "Mot de passe copie." });
+                          }}
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <Separator />
@@ -333,5 +461,15 @@ const FleetManagers = () => {
     </div>
   );
 };
+
+const InfoCard = ({ icon: Icon, label, value }: { icon: React.ElementType; label: string; value: string }) => (
+  <div className="p-3 bg-card rounded-xl border border-border">
+    <div className="flex items-center gap-2 mb-1">
+      <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+      <p className="text-[10px] text-muted-foreground leading-none">{label}</p>
+    </div>
+    <p className="text-sm font-medium text-foreground break-words">{value}</p>
+  </div>
+);
 
 export default FleetManagers;

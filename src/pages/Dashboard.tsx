@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Activity, Clock, Users, Zap } from "lucide-react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useLanguage } from "@/hooks/useLanguage";
@@ -24,7 +24,7 @@ const Dashboard = () => {
   const [counts, setCounts] = useState<DashboardCountsDTO>({});
   const [serviceRequests, setServiceRequests] = useState<ServiceRequestDTO[]>([]);
 
-  const loadDashboardData = async () => {
+  const loadDashboardData = useCallback(async () => {
     try {
       const [dashboard, requests, tenants] = await Promise.all([
         getDashboardCounts(),
@@ -48,11 +48,11 @@ const Dashboard = () => {
         setServiceRequests([]);
       }
     }
-  };
+  }, [allowFallback]);
 
   useEffect(() => {
-    loadDashboardData();
-  }, [allowFallback]);
+    void loadDashboardData();
+  }, [loadDashboardData]);
 
   useEffect(() => {
     if (!apiBacked) return;
@@ -60,17 +60,17 @@ const Dashboard = () => {
     const channel = supabase
       .channel('dashboard_updates')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'service_requests' }, () => {
-        loadDashboardData();
+        void loadDashboardData();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tenants' }, () => {
-        loadDashboardData();
+        void loadDashboardData();
       })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [apiBacked]);
+  }, [apiBacked, loadDashboardData]);
 
   const kpis: KPI[] = [
     { label: t("dashboard.total_accounts"), value: String((counts.providers || 0) + (counts.customers || 0)), icon: Users },

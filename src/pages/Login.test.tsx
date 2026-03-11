@@ -7,26 +7,20 @@ const {
   navigateMock,
   toastErrorMock,
   toastSuccessMock,
-  signUpMock,
   resetPasswordForEmailMock,
-  signInWithOAuthMock,
 } = vi.hoisted(() => {
   const signInMock = vi.fn();
   const navigateMock = vi.fn();
   const toastErrorMock = vi.fn();
   const toastSuccessMock = vi.fn();
-  const signUpMock = vi.fn();
   const resetPasswordForEmailMock = vi.fn();
-  const signInWithOAuthMock = vi.fn();
 
   return {
     signInMock,
     navigateMock,
     toastErrorMock,
     toastSuccessMock,
-    signUpMock,
     resetPasswordForEmailMock,
-    signInWithOAuthMock,
   };
 });
 
@@ -57,18 +51,9 @@ vi.mock('sonner', () => ({
   },
 }));
 
-vi.mock('@/integrations/lovable/index', () => ({
-  lovable: {
-    auth: {
-      signInWithOAuth: signInWithOAuthMock,
-    },
-  },
-}));
-
 vi.mock('@/integrations/supabase/client', () => ({
   supabase: {
     auth: {
-      signUp: signUpMock,
       resetPasswordForEmail: resetPasswordForEmailMock,
     },
   },
@@ -80,9 +65,7 @@ describe('Login page', () => {
     navigateMock.mockReset();
     toastErrorMock.mockReset();
     toastSuccessMock.mockReset();
-    signUpMock.mockReset();
     resetPasswordForEmailMock.mockReset();
-    signInWithOAuthMock.mockReset();
   });
 
   it('submits login and navigates to dashboard on success', async () => {
@@ -149,30 +132,14 @@ describe('Login page', () => {
     });
   });
 
-  it('submits signup and returns to login on success', async () => {
-    signUpMock.mockResolvedValue({ error: null });
-
+  it('does not expose public signup or google oauth', () => {
     render(<Login />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'auth.signup' }));
-    fireEvent.change(screen.getByPlaceholderText('Jean Dupont'), {
-      target: { value: 'Jane Admin' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('admin@fleetrescue.com'), {
-      target: { value: 'jane@test.com' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
-      target: { value: 'signup123' },
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'auth.signup' }));
-
-    await waitFor(() => {
-      expect(signUpMock).toHaveBeenCalled();
-      expect(toastSuccessMock).toHaveBeenCalledWith('auth.verify_email');
-    });
-
-    expect(screen.getByRole('button', { name: 'auth.login' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'auth.signup' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'auth.google' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Les comptes sont provisionnes par l administration. Aucun signup public n est autorise sur ce portail.'),
+    ).toBeInTheDocument();
   });
 
   it('submits forgot password and returns to login on success', async () => {
@@ -192,22 +159,5 @@ describe('Login page', () => {
     });
 
     expect(screen.getByRole('button', { name: 'auth.login' })).toBeInTheDocument();
-  });
-
-  it('shows toast error for google oauth failure and fallback branch', async () => {
-    signInWithOAuthMock.mockResolvedValueOnce({ error: new Error('oauth failed') });
-    signInWithOAuthMock.mockResolvedValueOnce({ error: null });
-
-    render(<Login />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'auth.google' }));
-    await waitFor(() => {
-      expect(toastErrorMock).toHaveBeenCalledWith('oauth failed');
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'auth.google' }));
-    await waitFor(() => {
-      expect(toastErrorMock).toHaveBeenCalledWith('auth.google error');
-    });
   });
 });

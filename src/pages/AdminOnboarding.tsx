@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { 
-  Check, X, Eye, Search, Filter, Building2, Mail, Phone, 
+  Check, X, Eye, Search, Filter, Building, Mail, Phone, 
   MapPin, Calendar, ClipboardCheck, AlertCircle, Clock,
   User, Truck, BadgeEuro
 } from "lucide-react";
@@ -49,6 +49,7 @@ const AdminOnboarding = () => {
     isAvailable: true,
   });
   const [techForm, setTechForm] = useState({ full_name: "", phone: "", skill: "" });
+  const [driverForm, setDriverForm] = useState({ full_name: "", phone: "", license_no: "" });
   const [assetForm, setAssetForm] = useState({
     service_id: "",
     base_price: "",
@@ -60,7 +61,7 @@ const AdminOnboarding = () => {
     license_no: "",
   });
 
-  const loadDetail = async (id: string) => {
+  const loadDetail = useCallback(async (id: string) => {
     const data = await getOnboardingDetail(id);
     setDetail(data);
     setActivationForm({
@@ -70,9 +71,21 @@ const AdminOnboarding = () => {
       serviceIds: "",
       isAvailable: true,
     });
-  };
+    setTechForm({ full_name: "", phone: "", skill: "" });
+    setDriverForm({ full_name: "", phone: "", license_no: "" });
+    setAssetForm({
+      service_id: "",
+      base_price: "",
+      label: "",
+      plate: "",
+      vehicle_type: "",
+      full_name: "",
+      phone: "",
+      license_no: "",
+    });
+  }, []);
 
-  const loadQueue = async () => {
+  const loadQueue = useCallback(async () => {
     setLoading(true);
     try {
       const params: any = {};
@@ -92,15 +105,15 @@ const AdminOnboarding = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [accountTypeFilter, search, statusFilter]);
 
   useEffect(() => {
-    loadQueue();
-  }, [statusFilter, accountTypeFilter]);
+    void loadQueue();
+  }, [loadQueue]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    loadQueue();
+    void loadQueue();
   };
 
   const openDetail = async (id: string) => {
@@ -173,7 +186,7 @@ const AdminOnboarding = () => {
       });
       setRejectOpen(false);
       await loadDetail(selectedId);
-      loadQueue();
+      void loadQueue();
     } catch (e) {
       toast({
         title: "Erreur",
@@ -222,22 +235,40 @@ const AdminOnboarding = () => {
       }
 
       if (resource === "drivers") {
-        if (!assetForm.full_name.trim()) throw new Error("Le nom du conducteur est requis.");
+        if (!driverForm.full_name.trim()) throw new Error("Le nom du conducteur est requis.");
         await onboardingCreateResource(selectedId, "drivers", {
-          full_name: assetForm.full_name.trim(),
-          phone: assetForm.phone.trim() || null,
-          license_no: assetForm.license_no.trim() || null,
+          full_name: driverForm.full_name.trim(),
+          phone: driverForm.phone.trim() || null,
+          license_no: driverForm.license_no.trim() || null,
         });
-        setAssetForm((prev) => ({ ...prev, full_name: "", phone: "", license_no: "" }));
+        setDriverForm({ full_name: "", phone: "", license_no: "" });
       }
 
       await loadDetail(selectedId);
-      loadQueue();
+      void loadQueue();
       toast({ title: "Ressource ajoutée", description: "Le dossier a été enrichi." });
     } catch (e) {
       toast({
         title: "Erreur",
         description: String((e as { message?: string })?.message || "Impossible d'ajouter la ressource."),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDeleteResource = async (resource: string, itemId: string) => {
+    if (!selectedId || !confirm("Voulez-vous vraiment supprimer cet élément ?")) return;
+    
+    try {
+      const { onboardingDeleteResource } = await import("@/lib/adminPortalClient");
+      await onboardingDeleteResource(selectedId, resource, itemId);
+      await loadDetail(selectedId);
+      void loadQueue();
+      toast({ title: "Ressource supprimée", description: "L'élément a été retiré du dossier." });
+    } catch (e) {
+      toast({
+        title: "Erreur",
+        description: String((e as { message?: string })?.message || "Échec de la suppression."),
         variant: "destructive",
       });
     }
@@ -339,7 +370,7 @@ const AdminOnboarding = () => {
               >
                 <div className="flex justify-between items-start mb-4">
                   <div className="h-12 w-12 rounded-xl bg-primary/5 flex items-center justify-center group-hover:bg-primary/10 transition-colors">
-                    <Building2 className="h-6 w-6 text-primary" />
+                    <Building className="h-6 w-6 text-primary" />
                   </div>
                   <Badge variant="outline" className={cn("rounded-lg px-2 py-0.5", status.color)}>
                     <status.icon className="h-3 w-3 mr-1" />
@@ -393,7 +424,7 @@ const AdminOnboarding = () => {
               {/* Infos générales */}
               <section className="space-y-4">
                 <h4 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-                  <Building2 className="h-4 w-4" /> Informations Entreprise
+                  <Building className="h-4 w-4" /> Informations Entreprise
                 </h4>
                 <div className="grid grid-cols-2 gap-4 bg-muted/30 p-4 rounded-xl">
                   <div>
@@ -444,7 +475,7 @@ const AdminOnboarding = () => {
 
                 <TabsContent value="tech">
                   <div className="space-y-3">
-                    {detail.onboarding?.status === 'draft' && detail.onboarding?.account_type === 'sp' && (
+                    {['draft', 'approved'].includes(detail.onboarding?.status) && detail.onboarding?.account_type === 'sp' && (
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 p-3 rounded-lg border border-border">
                         <Input
                           value={techForm.full_name}
@@ -466,22 +497,22 @@ const AdminOnboarding = () => {
                         </div>
                       </div>
                     )}
-                    {detail.onboarding?.status === 'draft' && detail.onboarding?.account_type === 'fleet_manager' && (
+                    {['draft', 'approved'].includes(detail.onboarding?.status) && detail.onboarding?.account_type === 'fleet_manager' && (
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 p-3 rounded-lg border border-border">
                         <Input
-                          value={techForm.full_name}
-                          onChange={(e) => setTechForm((prev) => ({ ...prev, full_name: e.target.value }))}
+                          value={driverForm.full_name}
+                          onChange={(e) => setDriverForm((prev) => ({ ...prev, full_name: e.target.value }))}
                           placeholder="Nom complet"
                         />
                         <Input
-                          value={techForm.phone}
-                          onChange={(e) => setTechForm((prev) => ({ ...prev, phone: e.target.value }))}
+                          value={driverForm.phone}
+                          onChange={(e) => setDriverForm((prev) => ({ ...prev, phone: e.target.value }))}
                           placeholder="Téléphone"
                         />
                         <div className="flex gap-2">
                           <Input
-                            value={techForm.license_no}
-                            onChange={(e) => setTechForm((prev) => ({ ...prev, license_no: e.target.value }))}
+                            value={driverForm.license_no}
+                            onChange={(e) => setDriverForm((prev) => ({ ...prev, license_no: e.target.value }))}
                             placeholder="No permis"
                           />
                           <Button type="button" onClick={() => handleAddResource("drivers")}>Ajouter</Button>
@@ -514,7 +545,7 @@ const AdminOnboarding = () => {
 
                 <TabsContent value="assets">
                   <div className="space-y-3">
-                    {detail.onboarding?.status === 'draft' && detail.onboarding?.account_type === 'sp' && (
+                    {['draft', 'approved'].includes(detail.onboarding?.status) && detail.onboarding?.account_type === 'sp' && (
                       <div className="grid grid-cols-1 md:grid-cols-[1fr_160px_auto] gap-2 p-3 rounded-lg border border-border">
                         <select
                           value={assetForm.service_id}
@@ -535,7 +566,7 @@ const AdminOnboarding = () => {
                         <Button type="button" onClick={() => handleAddResource("pricing")}>Ajouter</Button>
                       </div>
                     )}
-                    {detail.onboarding?.status === 'draft' && detail.onboarding?.account_type === 'fleet_manager' && (
+                    {['draft', 'approved'].includes(detail.onboarding?.status) && detail.onboarding?.account_type === 'fleet_manager' && (
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 p-3 rounded-lg border border-border">
                         <Input
                           value={assetForm.label}

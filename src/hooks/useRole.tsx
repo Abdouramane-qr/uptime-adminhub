@@ -17,31 +17,56 @@ export const useRole = () => {
     }
 
     const fetchRoles = async () => {
+      setLoading(true);
       try {
-        // Fetch from user_roles table
-        const { data: userRoles } = await supabase
-          .from("user_roles")
-          .select("role")
-          .eq("user_id", user.id);
+        // 1. Check if user is in the auditable admin_users table (Canonical Admin)
+        const { data: adminGrant } = await supabase
+          .from("admin_users")
+          .select("user_id")
+          .eq("user_id", user.id)
+          .is("revoked_at", null)
+          .maybeSingle();
 
-        // Fetch from profiles table as fallback/complement
+        // 2. Fetch from profiles table (Contextual Role)
         const { data: profile, error: profileError } = await supabase
           .from("profiles")
           .select("role")
           .eq("id", user.id)
           .maybeSingle();
 
-        if (profileError) {
-          throw profileError;
+        // 3. Fetch explicit app roles maintained by admin role management.
+        const { data: explicitRoles, error: rolesError } = await supabase
+          .from("user_roles")
+          .select("role")
+          .eq("user_id", user.id);
+
+        if (profileError || rolesError) {
+          throw profileError || rolesError;
         }
 
         const allRoles = new Set<AppRole>();
-        if (userRoles) userRoles.forEach(r => allRoles.add(r.role as AppRole));
-        if (profile?.role) allRoles.add(profile.role as AppRole);
+        
+        // If present in admin_users, they are definitely an admin
+        if (adminGrant) {
+          allRoles.add("admin");
+        }
+
+        (explicitRoles || []).forEach((row) => {
+          if (row.role === "admin" || row.role === "moderator" || row.role === "user") {
+            allRoles.add(row.role);
+          }
+        });
+
+        if (profile?.role) {
+          if (profile.role === "admin") allRoles.add("admin");
+          else if (profile.role === "moderator") allRoles.add("moderator");
+          else if (profile.role === "owner" || profile.role === "member" || profile.role === "user") allRoles.add("user");
+        }
 
         setRoles(Array.from(allRoles));
       } catch (e) {
         console.error("Error fetching roles:", e);
+        setRoles([]);
       } finally {
         setLoading(false);
       }

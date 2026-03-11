@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Search, Star, MapPin, Phone, Mail, Eye, Shield, Wrench, Truck, Zap, KeyRound, TrendingUp, Clock, Plus, Pencil, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Search, Star, MapPin, Phone, Mail, Eye, Shield, Wrench, Truck, Zap, KeyRound, TrendingUp, Clock, Plus, Pencil, Trash2, Download, Copy, Smartphone, FileText, Calendar, RotateCcw, Building } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -14,17 +14,23 @@ import {
   createAccount,
   deleteTenant,
   listServiceRequests,
+  listTechnicians,
   listTenants,
+  resetTenantOwnerPassword,
   type ServiceRequestDTO,
+  type TechnicianDTO,
   type TenantDTO,
   updateTenant,
 } from "@/lib/adminPortalClient";
 import DataSourceBadge from "@/components/DataSourceBadge";
 import { allowMockFallback } from "@/lib/runtimeFlags";
 import { reportFallbackHit } from "@/lib/fallbackTelemetry";
+import { exportToCSV } from "@/lib/exportUtils";
+import { loadApprovedSpProjection } from "@/lib/onboardingResourceProjection";
 
 interface Provider {
   id: string | number; name: string; contact: string; email: string; phone: string; city: string; radius: number;
+  ownerId?: string; ownerName?: string; regNumber: string; code?: string; approvedAt?: string; mobileAccessReady: boolean;
   rating: number; reviews: number; technicians: number; completedJobs: number; activeJobs: number;
   services: string[]; status: string; joined: string; responseTime: string;
 }
@@ -42,49 +48,98 @@ const Providers = () => {
   const [selected, setSelected] = useState<Provider | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Provider | null>(null);
-  const [form, setForm] = useState({ name: "", contact: "", email: "", phone: "", city: "", radius: "30", services: [] as string[] });
+  const [form, setForm] = useState({ name: "", email: "", phone: "" });
   const [deleteTarget, setDeleteTarget] = useState<Provider | null>(null);
+  const [tempPassword, setTempPassword] = useState<string | null>(null);
 
-  const norm = (v: string | undefined) => String(v || "").trim().toLowerCase();
-  const isProviderTenant = (tnt: TenantDTO) => {
-    const k = norm(tnt.tenant_type || tnt.type);
-    return k.includes("service") || k === "sp" || k.includes("provider");
-  };
-  const isCompleted = (s: string | undefined) => {
-    const k = norm(s);
-    return k === "completed" || k === "cancelled";
-  };
+  const loadProviders = useCallback(async () => {
+    const norm = (v: string | undefined) => String(v || "").trim().toLowerCase();
+    const isProviderTenant = (tnt: TenantDTO) => {
+      const k = norm(tnt.tenant_type || tnt.type);
+      return k.includes("service") || k === "sp" || k.includes("provider");
+    };
+    const isCompleted = (s: string | undefined) => {
+      const k = norm(s);
+      return k === "completed" || k === "cancelled";
+    };
 
-  const loadProviders = async () => {
     try {
-      const [tenants, requests] = await Promise.all([listTenants(), listServiceRequests()]);
-      const agg = new Map<string, { completed: number; active: number; services: Set<string> }>();
+      const [tenants, requests, technicians, onboardingProjection] = await Promise.all([
+        listTenants(),
+        listServiceRequests(),
+        listTechnicians().catch(() => [] as TechnicianDTO[]),
+        loadApprovedSpProjection().catch(() => ({ byCompanyName: new Map(), technicians: [] })),
+      ]);
+      const aggByTenantId = new Map<string, { completed: number; active: number; services: Set<string> }>();
+      const aggByName = new Map<string, { completed: number; active: number; services: Set<string> }>();
+      const techniciansByProviderId = new Map<string, number>();
+      const techniciansByName = new Map<string, number>();
+
+      const getBucket = (map: Map<string, { completed: number; active: number; services: Set<string> }>, key: string) => {
+        if (!map.has(key)) map.set(key, { completed: 0, active: 0, services: new Set<string>() });
+        return map.get(key)!;
+      };
 
       requests.forEach((r: ServiceRequestDTO) => {
-        const key = norm(r.provider_name || r.assigned_provider);
-        if (!key) return;
-        if (!agg.has(key)) agg.set(key, { completed: 0, active: 0, services: new Set<string>() });
-        const bucket = agg.get(key)!;
-        if (r.service_type || r.type) bucket.services.add(String(r.service_type || r.type));
-        if (isCompleted(r.status)) bucket.completed += 1;
-        else bucket.active += 1;
+        const serviceLabel = String(r.service_type || r.type || "").trim();
+        const tenantId = String(r.assigned_provider_tenant_id || "").trim();
+        const providerNameKey = norm(r.assigned_provider_name || r.provider_name || r.assigned_provider);
+
+        if (tenantId) {
+          const bucket = getBucket(aggByTenantId, tenantId);
+          if (serviceLabel) bucket.services.add(serviceLabel);
+          if (isCompleted(r.status)) bucket.completed += 1;
+          else bucket.active += 1;
+          return;
+        }
+
+        if (providerNameKey) {
+          const bucket = getBucket(aggByName, providerNameKey);
+          if (serviceLabel) bucket.services.add(serviceLabel);
+          if (isCompleted(r.status)) bucket.completed += 1;
+          else bucket.active += 1;
+        }
+      });
+
+      technicians.forEach((tech) => {
+        const providerTenantId = String(tech.provider_tenant_id || "").trim();
+        const providerName = norm(tech.provider);
+
+        if (providerTenantId) {
+          techniciansByProviderId.set(providerTenantId, (techniciansByProviderId.get(providerTenantId) || 0) + 1);
+          return;
+        }
+
+        if (providerName) {
+          techniciansByName.set(providerName, (techniciansByName.get(providerName) || 0) + 1);
+        }
       });
 
       const mapped: Provider[] = tenants.filter(isProviderTenant).map((tnt) => {
         const name = tnt.company_name || tnt.company || "Provider";
-        const key = norm(name);
-        const stats = agg.get(key) || { completed: 0, active: 0, services: new Set<string>() };
+        const stats = aggByTenantId.get(String(tnt.id)) || aggByName.get(norm(name)) || { completed: 0, active: 0, services: new Set<string>() };
+        const techniciansCount = Math.max(
+          techniciansByProviderId.get(String(tnt.id)) || 0,
+          techniciansByName.get(norm(name)) || 0,
+          onboardingProjection.byCompanyName.get(norm(name))?.technicians || 0,
+        );
         return {
           id: String(tnt.id),
           name,
           contact: tnt.owner_email || "N/A",
           email: tnt.email || tnt.owner_email || "N/A",
           phone: tnt.phone || "N/A",
+          ownerId: tnt.owner_id || tnt.user_id || undefined,
+          ownerName: tnt.owner_name || tnt.owner_email || tnt.email || undefined,
+          regNumber: tnt.registration_number || tnt.reg_number || "N/A",
+          code: tnt.code || undefined,
+          approvedAt: tnt.approved_at ? new Date(tnt.approved_at).toLocaleDateString("fr-FR") : undefined,
+          mobileAccessReady: Boolean(tnt.mobile_access_ready ?? ((tnt.code || (tnt.email || tnt.owner_email)))),
           city: "Backend non raccorde",
           radius: 0,
           rating: 0,
           reviews: 0,
-          technicians: 0,
+          technicians: techniciansCount,
           completedJobs: stats.completed,
           activeJobs: stats.active,
           services: Array.from(stats.services),
@@ -101,27 +156,47 @@ const Providers = () => {
       reportFallbackHit("Providers");
       if (!allowFallback) setProviders([]);
     }
-  };
+  }, [allowFallback]);
 
   useEffect(() => {
     void loadProviders();
-  }, [allowFallback]);
+  }, [loadProviders]);
 
   const filtered = providers.filter((p) => {
-    const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) || p.city.toLowerCase().includes(search.toLowerCase());
+    const q = search.toLowerCase();
+    const matchSearch =
+      p.name.toLowerCase().includes(q) ||
+      p.email.toLowerCase().includes(q) ||
+      p.phone.toLowerCase().includes(q);
     const matchStatus = statusFilter === "all" || p.status === statusFilter;
     return matchSearch && matchStatus;
   });
 
-  const openCreate = () => { setEditing(null); setForm({ name: "", contact: "", email: "", phone: "", city: "", radius: "30", services: [] }); setFormOpen(true); };
-  const openEdit = (p: Provider) => { setEditing(p); setForm({ name: p.name, contact: p.contact, email: p.email, phone: p.phone, city: p.city, radius: String(p.radius), services: [...p.services] }); setFormOpen(true); };
-  const toggleService = (s: string) => { setForm(f => ({ ...f, services: f.services.includes(s) ? f.services.filter(x => x !== s) : [...f.services, s] })); };
+  const handleExportCSV = () => {
+    const dataToExport = filtered.map(p => ({
+      ID: p.id,
+      Nom: p.name,
+      Email: p.email,
+      Telephone: p.phone,
+      Code: p.code || "",
+      "Numero Inscription": p.regNumber,
+      Status: p.status,
+      "Date Inscription": p.joined,
+      "Interventions Terminees": p.completedJobs,
+      Specialites: p.services.join(" | ")
+    }));
+    exportToCSV(dataToExport, "prestataires_uptime");
+    toast({ title: t("common.success"), description: "Fichier CSV généré." });
+  };
+
+  const openCreate = () => { setEditing(null); setForm({ name: "", email: "", phone: "" }); setFormOpen(true); };
+  const openEdit = (p: Provider) => { setEditing(p); setForm({ name: p.name, email: p.email, phone: p.phone }); setFormOpen(true); };
 
   const handleSave = async () => {
     if (!form.name || !form.email) { toast({ title: t("providers.required_fields"), description: t("providers.required_fields_desc"), variant: "destructive" }); return; }
     try {
       if (editing) {
-        if (apiBacked) {
+        if (apiBacked || !allowFallback) {
           await updateTenant(String(editing.id), {
             company_name: form.name,
             tenant_type: "service_provider",
@@ -130,11 +205,11 @@ const Providers = () => {
           });
           await loadProviders();
         } else {
-          setProviders(prev => prev.map(p => p.id === editing.id ? { ...p, name: form.name, contact: form.contact, email: form.email, phone: form.phone, city: form.city, radius: Number(form.radius), services: form.services } : p));
+          setProviders(prev => prev.map(p => p.id === editing.id ? { ...p, name: form.name, email: form.email, phone: form.phone } : p));
         }
         toast({ title: t("providers.updated"), description: `${form.name} ${t("providers.updated_desc")}` });
       } else {
-        if (apiBacked) {
+        if (apiBacked || !allowFallback) {
           await createAccount({
             company_name: form.name,
             tenant_type: "service_provider",
@@ -144,7 +219,29 @@ const Providers = () => {
           });
           await loadProviders();
         } else {
-          setProviders(prev => [{ id: Date.now(), ...form, radius: Number(form.radius), rating: 0, reviews: 0, technicians: 0, completedJobs: 0, activeJobs: 0, status: "pending", joined: "Mar 2026", responseTime: "N/A" }, ...prev]);
+          setProviders(prev => [{
+            id: Date.now(),
+            name: form.name,
+            contact: form.email,
+            email: form.email,
+            phone: form.phone,
+            ownerName: form.email,
+            regNumber: "N/A",
+            code: undefined,
+            approvedAt: undefined,
+            mobileAccessReady: Boolean(form.email),
+            city: "Mock",
+            radius: 0,
+            rating: 0,
+            reviews: 0,
+            technicians: 0,
+            completedJobs: 0,
+            activeJobs: 0,
+            services: [],
+            status: "pending",
+            joined: "Mar 2026",
+            responseTime: "N/A",
+          }, ...prev]);
         }
         toast({ title: t("providers.created"), description: `${form.name} ${t("providers.created_desc")}` });
       }
@@ -161,7 +258,7 @@ const Providers = () => {
   const handleDelete = async () => {
     if (!deleteTarget) return;
     try {
-      if (apiBacked) {
+      if (apiBacked || !allowFallback) {
         await deleteTenant(String(deleteTarget.id));
         await loadProviders();
       } else {
@@ -208,6 +305,13 @@ const Providers = () => {
             <SelectTrigger className="w-36 rounded-xl"><SelectValue /></SelectTrigger>
             <SelectContent><SelectItem value="all">{t("providers.all")}</SelectItem><SelectItem value="approved">{t("providers.approved")}</SelectItem><SelectItem value="pending">{t("providers.pending")}</SelectItem></SelectContent>
           </Select>
+          <Button 
+            variant="outline" 
+            className="rounded-xl gap-2 text-muted-foreground hover:text-foreground"
+            onClick={handleExportCSV}
+          >
+            <Download className="h-4 w-4" /> CSV
+          </Button>
           <Button onClick={openCreate} className="rounded-xl gap-2"><Plus className="h-4 w-4" /> {t("providers.add")}</Button>
         </div>
       </div>
@@ -253,21 +357,13 @@ const Providers = () => {
           <div className="space-y-4 mt-2">
             <div><label className="text-sm font-medium text-foreground mb-1 block">{t("providers.name_label")}</label>
               <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="w-full h-10 px-3 rounded-xl border border-input bg-card text-sm text-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder={t("providers.name_placeholder")} /></div>
-            <div><label className="text-sm font-medium text-foreground mb-1 block">{t("providers.contact_label")}</label>
-              <input value={form.contact} onChange={e => setForm(f => ({ ...f, contact: e.target.value }))} className="w-full h-10 px-3 rounded-xl border border-input bg-card text-sm text-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder={t("providers.contact_placeholder")} /></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className="text-sm font-medium text-foreground mb-1 block">{t("providers.email_label")}</label>
-                <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} className="w-full h-10 px-3 rounded-xl border border-input bg-card text-sm text-foreground focus:border-primary outline-none" /></div>
-              <div><label className="text-sm font-medium text-foreground mb-1 block">{t("providers.city_label")}</label>
-                <input value={form.city} onChange={e => setForm(f => ({ ...f, city: e.target.value }))} className="w-full h-10 px-3 rounded-xl border border-input bg-card text-sm text-foreground focus:border-primary outline-none" /></div>
-            </div>
-            <div><label className="text-sm font-medium text-foreground mb-1 block">{t("providers.services_label")}</label>
-              <div className="flex flex-wrap gap-2">
-                {allServices.map(s => (
-                  <button key={s} onClick={() => toggleService(s)} className={`text-xs px-3 py-1.5 rounded-lg border transition-all ${form.services.includes(s) ? "bg-primary/10 text-primary border-primary/30" : "bg-card text-muted-foreground border-input hover:border-primary/20"}`}>{s}</button>
-                ))}
-              </div>
-            </div>
+            <div><label className="text-sm font-medium text-foreground mb-1 block">{t("providers.email_label")}</label>
+              <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} className="w-full h-10 px-3 rounded-xl border border-input bg-card text-sm text-foreground focus:border-primary outline-none" /></div>
+            <div><label className="text-sm font-medium text-foreground mb-1 block">Telephone</label>
+              <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} className="w-full h-10 px-3 rounded-xl border border-input bg-card text-sm text-foreground focus:border-primary outline-none" placeholder="+226 ..." /></div>
+            <p className="text-xs text-muted-foreground">
+              Les champs couverture, services internes et indicateurs operationnels restent derives du backend et ne sont pas modifiables depuis ce formulaire.
+            </p>
             <div className="flex justify-end gap-3 pt-2">
               <button onClick={() => setFormOpen(false)} className="h-10 px-4 rounded-xl border border-input text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">{t("providers.cancel")}</button>
               <button onClick={handleSave} className="h-10 px-6 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity">{editing ? t("providers.save") : t("providers.create")}</button>
@@ -301,9 +397,85 @@ const Providers = () => {
                 <div className="space-y-3">
                   <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t("providers.contact")}</h4>
                   <div className="space-y-2 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-2"><Smartphone className="h-4 w-4" /> {selected.ownerName || "Owner non projete"}</div>
                     <div className="flex items-center gap-2"><Mail className="h-4 w-4" /> {selected.email}</div>
                     <div className="flex items-center gap-2"><Phone className="h-4 w-4" /> {selected.phone}</div>
+                    <div className="flex items-center gap-2"><FileText className="h-4 w-4" /> {selected.regNumber}</div>
+                    <div className="flex items-center gap-2"><Calendar className="h-4 w-4" /> {selected.approvedAt || selected.joined}</div>
                     <div className="flex items-center gap-2"><MapPin className="h-4 w-4" /> {selected.city}</div>
+                  </div>
+                </div>
+                <Separator />
+                <div className="space-y-3">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Acces mobile</h4>
+                  <div className="rounded-2xl border border-primary/10 bg-primary/5 p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">Identifiants terrain</p>
+                        <p className="text-xs text-muted-foreground">Code, email, telephone et reset mot de passe.</p>
+                      </div>
+                      <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-lg ${selected.mobileAccessReady ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${selected.mobileAccessReady ? "bg-success" : "bg-warning"}`} />
+                        {selected.mobileAccessReady ? "Infos disponibles" : "Infos incompletes"}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <InfoCard icon={Building} label="Code entreprise" value={selected.code || "N/A"} />
+                      <InfoCard icon={Mail} label="Email" value={selected.email} />
+                      <InfoCard icon={Phone} label="Telephone" value={selected.phone} />
+                      <InfoCard icon={FileText} label="Registration no." value={selected.regNumber} />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        className="flex-1 rounded-xl h-10 text-xs font-semibold gap-2 border-primary/20 hover:bg-primary/5 hover:text-primary transition-all"
+                        onClick={() => {
+                          const text = `App: Fleet Rescue\nCode: ${selected.code || "N/A"}\nEmail: ${selected.email}\nPhone: ${selected.phone}\nRegistration: ${selected.regNumber}`;
+                          navigator.clipboard.writeText(text);
+                          toast({ title: t("common.success"), description: "Acces mobile copie." });
+                        }}
+                      >
+                        <Copy className="h-3.5 w-3.5" /> Copier
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="rounded-xl h-10 w-10 p-0 border-info/20 text-info hover:bg-info/5 hover:text-info transition-all"
+                        title="Reinitialiser mot de passe"
+                        onClick={async () => {
+                          if (confirm("Reinitialiser le mot de passe du compte proprietaire ?")) {
+                            try {
+                              const newPass = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+                              await resetTenantOwnerPassword(String(selected.id), newPass);
+                              setTempPassword(newPass);
+                              toast({ title: t("common.success"), description: "Nouveau mot de passe genere." });
+                            } catch {
+                              toast({ title: t("common.error"), description: "Echec de reinitialisation", variant: "destructive" });
+                            }
+                          }
+                        }}
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    {tempPassword && (
+                      <div className="rounded-xl border border-border bg-card p-3 flex items-center justify-between">
+                        <div>
+                          <p className="text-[10px] text-muted-foreground mb-1">Mot de passe temporaire</p>
+                          <code className="text-sm font-bold font-mono tracking-wider">{tempPassword}</code>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="rounded-lg"
+                          onClick={() => {
+                            navigator.clipboard.writeText(tempPassword);
+                            toast({ title: t("common.success"), description: "Mot de passe copie." });
+                          }}
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <Separator />
@@ -333,5 +505,15 @@ const Providers = () => {
     </div>
   );
 };
+
+const InfoCard = ({ icon: Icon, label, value }: { icon: React.ElementType; label: string; value: string }) => (
+  <div className="p-3 bg-card rounded-xl border border-border">
+    <div className="flex items-center gap-2 mb-1">
+      <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+      <p className="text-[10px] text-muted-foreground leading-none">{label}</p>
+    </div>
+    <p className="text-sm font-medium text-foreground break-words">{value}</p>
+  </div>
+);
 
 export default Providers;

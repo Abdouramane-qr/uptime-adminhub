@@ -52,9 +52,17 @@ interface Props {
 }
 
 const InterventionMarker = ({ intervention, onSelect }: Props) => {
+  // Validate coordinates to prevent Leaflet crash
+  const lat = Number(intervention.lat);
+  const lng = Number(intervention.lng);
+  
+  if (isNaN(lat) || Number(lat) === 0 || isNaN(lng) || Number(lng) === 0) {
+    return null;
+  }
+
   return (
     <Marker
-      position={[intervention.lat, intervention.lng]}
+      position={[lat, lng]}
       icon={createInterventionIcon(intervention.urgency, intervention.id)}
       eventHandlers={{ click: () => onSelect(intervention.id) }}
     >

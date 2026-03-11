@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Save, Bell, Lock, AlertTriangle, Building2, Mail, Phone, MapPin, Globe, Eye, EyeOff } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Save, Bell, Lock, AlertTriangle, Building, Mail, Phone, MapPin, Globe, Eye, EyeOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -7,38 +7,119 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import EmptyState from "@/components/EmptyState";
 import { toast } from "@/hooks/use-toast";
+import { useSpOnboardingDraft } from "@/hooks/useSpOnboardingDraft";
+import { useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/integrations/supabase/client";
+
+type NotificationSettings = {
+  newJobs: boolean;
+  jobUpdates: boolean;
+  invoiceReminders: boolean;
+  technicianAlerts: boolean;
+  marketingEmails: boolean;
+  smsAlerts: boolean;
+};
+
+const defaultNotifications: NotificationSettings = {
+  newJobs: true,
+  jobUpdates: true,
+  invoiceReminders: true,
+  technicianAlerts: true,
+  marketingEmails: false,
+  smsAlerts: true,
+};
 
 const SpSettings = () => {
+  const { user } = useAuth();
+  const { detail, loading, error, saveDraft } = useSpOnboardingDraft();
   const [company, setCompany] = useState({
-    name: "AutoFix Pro",
-    email: "contact@autofixpro.com",
-    phone: "+33 1 42 68 53 00",
-    address: "14 Rue de Rivoli, 75004 Paris, France",
-    website: "https://autofixpro.fr",
-    description: "Professional roadside assistance and vehicle repair services operating across the Île-de-France region since 2018.",
+    name: "",
+    email: "",
+    phone: "",
+    registrationNumber: "",
+    website: "",
+    address: "",
+    description: "",
   });
-
-  const [notifications, setNotifications] = useState({
-    newJobs: true,
-    jobUpdates: true,
-    invoiceReminders: true,
-    technicianAlerts: true,
-    marketingEmails: false,
-    smsAlerts: true,
-  });
-
+  const [notifications, setNotifications] = useState<NotificationSettings>(defaultNotifications);
   const [showPassword, setShowPassword] = useState({ current: false, new: false, confirm: false });
   const [passwords, setPasswords] = useState({ current: "", new: "", confirm: "" });
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
 
-  const handleSaveProfile = () => {
-    toast({ title: "Profile updated", description: "Your company profile has been saved." });
+  useEffect(() => {
+    const metadata = (user?.user_metadata || {}) as Record<string, unknown>;
+    const onboarding = detail?.onboarding;
+    const rawNotifications = metadata.notification_preferences;
+    const notificationOverrides =
+      rawNotifications && typeof rawNotifications === "object"
+        ? (rawNotifications as Partial<NotificationSettings>)
+        : {};
+
+    setCompany({
+      name: onboarding?.company_name || String(metadata.company_name || ""),
+      email: user?.email || onboarding?.contact_email || "",
+      phone: onboarding?.contact_phone || String(metadata.company_phone || ""),
+      registrationNumber:
+        onboarding?.registration_number || String(metadata.registration_number || ""),
+      website: String(metadata.company_website || ""),
+      address: String(metadata.company_address || ""),
+      description: String(metadata.company_description || ""),
+    });
+    setNotifications({ ...defaultNotifications, ...notificationOverrides });
+  }, [detail?.onboarding, user]);
+
+  const handleSaveProfile = async () => {
+    setSavingProfile(true);
+    try {
+      await saveDraft({
+        company_name: company.name.trim(),
+        contact_phone: company.phone.trim(),
+        registration_number: company.registrationNumber.trim(),
+      });
+
+      const { error: metadataError } = await supabase.auth.updateUser({
+        data: {
+          company_name: company.name.trim(),
+          company_phone: company.phone.trim(),
+          registration_number: company.registrationNumber.trim(),
+          company_website: company.website.trim(),
+          company_address: company.address.trim(),
+          company_description: company.description.trim(),
+          notification_preferences: notifications,
+        },
+      });
+
+      if (metadataError) throw metadataError;
+
+      toast({
+        title: "Profile updated",
+        description: "Your company profile has been saved.",
+      });
+    } catch (err) {
+      toast({
+        title: "Profile update failed",
+        description: String((err as { message?: string })?.message || "Unable to save your settings."),
+        variant: "destructive",
+      });
+    } finally {
+      setSavingProfile(false);
+    }
   };
 
-  const handleChangePassword = () => {
+  const handleChangePassword = async () => {
     if (!passwords.current || !passwords.new || !passwords.confirm) {
       toast({ title: "Missing fields", description: "Please fill in all password fields.", variant: "destructive" });
       return;
@@ -47,12 +128,71 @@ const SpSettings = () => {
       toast({ title: "Passwords don't match", description: "New password and confirmation must match.", variant: "destructive" });
       return;
     }
-    toast({ title: "Password changed", description: "Your password has been updated successfully." });
-    setPasswords({ current: "", new: "", confirm: "" });
+    if (passwords.new.length < 6) {
+      toast({ title: "Password too short", description: "Use at least 6 characters.", variant: "destructive" });
+      return;
+    }
+
+    const email = user?.email || company.email.trim();
+    if (!email) {
+      toast({ title: "Missing email", description: "No account email is available for password verification.", variant: "destructive" });
+      return;
+    }
+
+    setSavingPassword(true);
+    try {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password: passwords.current,
+      });
+      if (signInError) throw signInError;
+
+      const { error: updateError } = await supabase.auth.updateUser({ password: passwords.new });
+      if (updateError) throw updateError;
+
+      toast({
+        title: "Password changed",
+        description: "Your password has been updated successfully.",
+      });
+      setPasswords({ current: "", new: "", confirm: "" });
+    } catch (err) {
+      toast({
+        title: "Password update failed",
+        description: String((err as { message?: string })?.message || "Unable to update your password."),
+        variant: "destructive",
+      });
+    } finally {
+      setSavingPassword(false);
+    }
   };
 
-  const toggleNotif = (key: keyof typeof notifications) =>
-    setNotifications((p) => ({ ...p, [key]: !p[key] }));
+  const handleDeleteAccount = () => {
+    toast({
+      title: "Deletion unavailable",
+      description: "Account deletion is not connected to the backend yet.",
+      variant: "destructive",
+    });
+  };
+
+  const toggleNotif = (key: keyof NotificationSettings) =>
+    setNotifications((prev) => ({ ...prev, [key]: !prev[key] }));
+
+  if (loading) {
+    return <div className="h-64 rounded-xl bg-muted animate-pulse" />;
+  }
+
+  if (error) {
+    return <EmptyState title="Settings unavailable" description={error} />;
+  }
+
+  if (!detail?.onboarding) {
+    return (
+      <EmptyState
+        title="No SP record"
+        description="Complete the onboarding flow before managing service-provider settings."
+      />
+    );
+  }
 
   const PasswordInput = ({ label, value, field }: { label: string; value: string; field: "current" | "new" | "confirm" }) => (
     <div className="space-y-2">
@@ -61,12 +201,12 @@ const SpSettings = () => {
         <Input
           type={showPassword[field] ? "text" : "password"}
           value={value}
-          onChange={(e) => setPasswords((p) => ({ ...p, [field]: e.target.value }))}
+          onChange={(e) => setPasswords((prev) => ({ ...prev, [field]: e.target.value }))}
           className="pr-10"
         />
         <button
           type="button"
-          onClick={() => setShowPassword((p) => ({ ...p, [field]: !p[field] }))}
+          onClick={() => setShowPassword((prev) => ({ ...prev, [field]: !prev[field] }))}
           className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
         >
           {showPassword[field] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -89,58 +229,63 @@ const SpSettings = () => {
     <div className="space-y-6 animate-fade-in max-w-3xl">
       <h1 className="text-2xl font-bold text-foreground">Settings</h1>
 
-      {/* Company Profile */}
       <section className="bg-card rounded-xl shadow-sm border border-border p-6 space-y-5">
         <div className="flex items-center gap-2">
-          <Building2 className="h-5 w-5 text-amber-600" />
+          <Building className="h-5 w-5 text-amber-600" />
           <h2 className="text-lg font-semibold text-foreground">Company Profile</h2>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Company Name</Label>
-            <Input value={company.name} onChange={(e) => setCompany((p) => ({ ...p, name: e.target.value }))} />
+            <Input value={company.name} onChange={(e) => setCompany((prev) => ({ ...prev, name: e.target.value }))} />
           </div>
           <div className="space-y-2">
             <Label>Email</Label>
             <div className="relative">
               <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input value={company.email} onChange={(e) => setCompany((p) => ({ ...p, email: e.target.value }))} className="pl-9" />
+              <Input value={company.email} disabled className="pl-9 opacity-80" />
             </div>
           </div>
           <div className="space-y-2">
             <Label>Phone</Label>
             <div className="relative">
               <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input value={company.phone} onChange={(e) => setCompany((p) => ({ ...p, phone: e.target.value }))} className="pl-9" />
+              <Input value={company.phone} onChange={(e) => setCompany((prev) => ({ ...prev, phone: e.target.value }))} className="pl-9" />
             </div>
           </div>
           <div className="space-y-2">
+            <Label>Registration Number</Label>
+            <div className="relative">
+              <Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input value={company.registrationNumber} onChange={(e) => setCompany((prev) => ({ ...prev, registrationNumber: e.target.value }))} className="pl-9" />
+            </div>
+          </div>
+          <div className="space-y-2 sm:col-span-2">
             <Label>Website</Label>
             <div className="relative">
               <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input value={company.website} onChange={(e) => setCompany((p) => ({ ...p, website: e.target.value }))} className="pl-9" />
+              <Input value={company.website} onChange={(e) => setCompany((prev) => ({ ...prev, website: e.target.value }))} className="pl-9" />
             </div>
           </div>
         </div>
         <div className="space-y-2">
-          <Label>Address</Label>
+          <Label>Address / Zone</Label>
           <div className="relative">
             <MapPin className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-            <Input value={company.address} onChange={(e) => setCompany((p) => ({ ...p, address: e.target.value }))} className="pl-9" />
+            <Input value={company.address} onChange={(e) => setCompany((prev) => ({ ...prev, address: e.target.value }))} className="pl-9" />
           </div>
         </div>
         <div className="space-y-2">
           <Label>Description</Label>
-          <Textarea value={company.description} onChange={(e) => setCompany((p) => ({ ...p, description: e.target.value }))} rows={3} />
+          <Textarea value={company.description} onChange={(e) => setCompany((prev) => ({ ...prev, description: e.target.value }))} rows={3} />
         </div>
         <div className="flex justify-end">
-          <Button onClick={handleSaveProfile} className="bg-amber-500 hover:bg-amber-600 text-white">
-            <Save className="h-4 w-4 mr-2" /> Save Changes
+          <Button onClick={() => void handleSaveProfile()} className="bg-amber-500 hover:bg-amber-600 text-white" disabled={savingProfile}>
+            <Save className="h-4 w-4 mr-2" /> {savingProfile ? "Saving..." : "Save Changes"}
           </Button>
         </div>
       </section>
 
-      {/* Notifications */}
       <section className="bg-card rounded-xl shadow-sm border border-border p-6 space-y-1">
         <div className="flex items-center gap-2 mb-3">
           <Bell className="h-5 w-5 text-amber-600" />
@@ -159,7 +304,6 @@ const SpSettings = () => {
         <NotifRow label="Marketing emails" description="Product updates and promotional content" checked={notifications.marketingEmails} onToggle={() => toggleNotif("marketingEmails")} />
       </section>
 
-      {/* Password */}
       <section className="bg-card rounded-xl shadow-sm border border-border p-6 space-y-5">
         <div className="flex items-center gap-2">
           <Lock className="h-5 w-5 text-amber-600" />
@@ -171,11 +315,12 @@ const SpSettings = () => {
           <PasswordInput label="Confirm New Password" value={passwords.confirm} field="confirm" />
         </div>
         <div className="flex justify-end">
-          <Button onClick={handleChangePassword} variant="outline">Update Password</Button>
+          <Button onClick={() => void handleChangePassword()} variant="outline" disabled={savingPassword}>
+            {savingPassword ? "Updating..." : "Update Password"}
+          </Button>
         </div>
       </section>
 
-      {/* Danger Zone */}
       <section className="bg-card rounded-xl shadow-sm border border-destructive/30 p-6 space-y-4">
         <div className="flex items-center gap-2">
           <AlertTriangle className="h-5 w-5 text-destructive" />
@@ -192,12 +337,15 @@ const SpSettings = () => {
             <AlertDialogHeader>
               <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
               <AlertDialogDescription>
-                This will permanently delete your AutoFix Pro account, remove all technicians, services, and invoice history. This action cannot be undone.
+                This action is not connected to the backend yet and remains blocked until a secure delete workflow is implemented.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              <AlertDialogAction
+                onClick={handleDeleteAccount}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
                 Delete Account
               </AlertDialogAction>
             </AlertDialogFooter>

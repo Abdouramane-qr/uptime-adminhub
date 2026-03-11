@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -13,31 +14,36 @@ import AppLayout from "./components/AppLayout";
 import SpLayout from "./components/SpLayout";
 import Login from "./pages/Login";
 import ResetPassword from "./pages/ResetPassword";
-import Settings from "./pages/Settings";
-import Dashboard from "./pages/Dashboard";
-import Accounts from "./pages/Accounts";
-import Interventions from "./pages/Interventions";
-import Providers from "./pages/Providers";
-import FleetManagers from "./pages/FleetManagers";
-import Map from "./pages/Map";
-import Dispatch from "./pages/Dispatch";
-import Technicians from "./pages/Technicians";
-import AuditLogs from "./pages/AuditLogs";
-import Billing from "./pages/Billing";
-import Analytics from "./pages/Analytics";
-import Documentation from "./pages/Documentation";
-import UserGuide from "./pages/UserGuide";
-import AdminOnboarding from "./pages/AdminOnboarding";
-import SpDashboard from "./pages/sp/SpDashboard";
-import SpTechnicians from "./pages/sp/SpTechnicians";
-import SpServices from "./pages/sp/SpServices";
-import SpInvoices from "./pages/sp/SpInvoices";
-import SpOnboarding from "./pages/sp/SpOnboarding";
-import SpSettings from "./pages/sp/SpSettings";
-import Profile from "./pages/Profile";
-import AdminRoles from "./pages/AdminRoles";
 import PendingAccess from "./pages/PendingAccess";
 import NotFound from "./pages/NotFound";
+import SpGuard from "./components/SpGuard";
+import { Loader2 } from "lucide-react";
+
+const Settings = lazy(() => import("./pages/Settings"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Accounts = lazy(() => import("./pages/Accounts"));
+const Interventions = lazy(() => import("./pages/Interventions"));
+const Providers = lazy(() => import("./pages/Providers"));
+const FleetManagers = lazy(() => import("./pages/FleetManagers"));
+const Map = lazy(() => import("./pages/Map"));
+const Dispatch = lazy(() => import("./pages/Dispatch"));
+const Technicians = lazy(() => import("./pages/Technicians"));
+const AuditLogs = lazy(() => import("./pages/AuditLogs"));
+const Billing = lazy(() => import("./pages/Billing"));
+const Analytics = lazy(() => import("./pages/Analytics"));
+const Documentation = lazy(() => import("./pages/Documentation"));
+const UserGuide = lazy(() => import("./pages/UserGuide"));
+const AdminOnboarding = lazy(() => import("./pages/AdminOnboarding"));
+const SpDashboard = lazy(() => import("./pages/sp/SpDashboard"));
+const SpTechnicians = lazy(() => import("./pages/sp/SpTechnicians"));
+const SpServices = lazy(() => import("./pages/sp/SpServices"));
+const SpInvoices = lazy(() => import("./pages/sp/SpInvoices"));
+const SpOnboarding = lazy(() => import("./pages/sp/SpOnboarding"));
+const SpSettings = lazy(() => import("./pages/sp/SpSettings"));
+const SpInterventions = lazy(() => import("./pages/sp/SpInterventions"));
+const SpMap = lazy(() => import("./pages/sp/SpMap"));
+const Profile = lazy(() => import("./pages/Profile"));
+const AdminRoles = lazy(() => import("./pages/AdminRoles"));
 
 const queryClient = new QueryClient();
 
@@ -50,6 +56,12 @@ const PlaceholderPage = ({ title }: { title: string }) => (
   </div>
 );
 
+const RouteFallback = () => (
+  <div className="min-h-[320px] flex items-center justify-center">
+    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+  </div>
+);
+
 const App = () => (
   <ThemeProvider>
     <LanguageProvider>
@@ -59,43 +71,45 @@ const App = () => (
             <Toaster />
             <Sonner />
             <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-              <Routes>
-                <Route path="/login" element={<Login />} />
-                <Route path="/reset-password" element={<ResetPassword />} />
-                <Route path="/pending-access" element={<ProtectedRoute><PendingAccess /></ProtectedRoute>} />
-                <Route path="/" element={<ProtectedRoute><AdminGuard><AppLayout /></AdminGuard></ProtectedRoute>}>
-                  <Route index element={<Navigate to="/dashboard" replace />} />
-                  <Route path="dashboard" element={<Dashboard />} />
-                  <Route path="accounts" element={<RoleGuard allowedRoles={["admin"]}><Accounts /></RoleGuard>} />
-                  <Route path="onboarding" element={<RoleGuard allowedRoles={["admin"]}><AdminOnboarding /></RoleGuard>} />
-                  <Route path="providers" element={<Providers />} />
-                  <Route path="fleet-managers" element={<FleetManagers />} />
-                  <Route path="interventions" element={<Interventions />} />
-                  <Route path="map" element={<Map />} />
-                  <Route path="dispatch" element={<RoleGuard allowedRoles={["admin", "moderator"]}><Dispatch /></RoleGuard>} />
-                  <Route path="technicians" element={<Technicians />} />
-                  <Route path="audit-logs" element={<RoleGuard allowedRoles={["admin"]}><AuditLogs /></RoleGuard>} />
-                  <Route path="billing" element={<RoleGuard allowedRoles={["admin", "moderator"]}><Billing /></RoleGuard>} />
-                  <Route path="analytics" element={<RoleGuard allowedRoles={["admin", "moderator"]}><Analytics /></RoleGuard>} />
-                  <Route path="documentation" element={<Documentation />} />
-                  <Route path="user-guide" element={<UserGuide />} />
-                  <Route path="profile" element={<Profile />} />
-                  <Route path="admin-roles" element={<RoleGuard allowedRoles={["admin"]}><AdminRoles /></RoleGuard>} />
-                  <Route path="settings" element={<RoleGuard allowedRoles={["admin", "moderator"]}><Settings /></RoleGuard>} />
-                </Route>
-                <Route path="/sp" element={<ProtectedRoute><SpLayout /></ProtectedRoute>}>
-                  <Route index element={<Navigate to="/sp/dashboard" replace />} />
-                  <Route path="dashboard" element={<SpDashboard />} />
-                  <Route path="technicians" element={<SpTechnicians />} />
-                  <Route path="services" element={<SpServices />} />
-                  <Route path="interventions" element={<PlaceholderPage title="Interventions" />} />
-                  <Route path="map" element={<PlaceholderPage title="Map View" />} />
-                  <Route path="invoices" element={<SpInvoices />} />
-                  <Route path="onboarding" element={<SpOnboarding />} />
-                  <Route path="settings" element={<SpSettings />} />
-                </Route>
-                <Route path="*" element={<NotFound />} />
-              </Routes>
+              <Suspense fallback={<RouteFallback />}>
+                <Routes>
+                  <Route path="/login" element={<Login />} />
+                  <Route path="/reset-password" element={<ResetPassword />} />
+                  <Route path="/pending-access" element={<ProtectedRoute><PendingAccess /></ProtectedRoute>} />
+                  <Route path="/" element={<ProtectedRoute><AdminGuard><AppLayout /></AdminGuard></ProtectedRoute>}>
+                    <Route index element={<Navigate to="/dashboard" replace />} />
+                    <Route path="dashboard" element={<Dashboard />} />
+                    <Route path="accounts" element={<RoleGuard allowedRoles={["admin"]}><Accounts /></RoleGuard>} />
+                    <Route path="onboarding" element={<RoleGuard allowedRoles={["admin"]}><AdminOnboarding /></RoleGuard>} />
+                    <Route path="providers" element={<Providers />} />
+                    <Route path="fleet-managers" element={<FleetManagers />} />
+                    <Route path="interventions" element={<Interventions />} />
+                    <Route path="map" element={<Map />} />
+                    <Route path="dispatch" element={<RoleGuard allowedRoles={["admin", "moderator"]}><Dispatch /></RoleGuard>} />
+                    <Route path="technicians" element={<Technicians />} />
+                    <Route path="audit-logs" element={<RoleGuard allowedRoles={["admin"]}><AuditLogs /></RoleGuard>} />
+                    <Route path="billing" element={<RoleGuard allowedRoles={["admin", "moderator"]}><Billing /></RoleGuard>} />
+                    <Route path="analytics" element={<RoleGuard allowedRoles={["admin", "moderator"]}><Analytics /></RoleGuard>} />
+                    <Route path="documentation" element={<Documentation />} />
+                    <Route path="user-guide" element={<UserGuide />} />
+                    <Route path="profile" element={<Profile />} />
+                    <Route path="admin-roles" element={<RoleGuard allowedRoles={["admin"]}><AdminRoles /></RoleGuard>} />
+                    <Route path="settings" element={<RoleGuard allowedRoles={["admin", "moderator"]}><Settings /></RoleGuard>} />
+                  </Route>
+                  <Route path="/sp" element={<ProtectedRoute><SpGuard><SpLayout /></SpGuard></ProtectedRoute>}>
+                    <Route index element={<Navigate to="/sp/dashboard" replace />} />
+                    <Route path="dashboard" element={<SpDashboard />} />
+                    <Route path="technicians" element={<SpTechnicians />} />
+                    <Route path="services" element={<SpServices />} />
+                    <Route path="interventions" element={<SpInterventions />} />
+                    <Route path="map" element={<SpMap />} />
+                    <Route path="invoices" element={<SpInvoices />} />
+                    <Route path="onboarding" element={<SpOnboarding />} />
+                    <Route path="settings" element={<SpSettings />} />
+                  </Route>
+                  <Route path="*" element={<NotFound />} />
+                </Routes>
+              </Suspense>
             </BrowserRouter>
           </TooltipProvider>
         </QueryClientProvider>

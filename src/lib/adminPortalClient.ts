@@ -137,7 +137,7 @@ async function invalidateSession(reason: string): Promise<void> {
   signOutPromise = (async () => {
     console.error("[Auth] Invalid session detected. Clearing local session.", { reason });
     clearCachedSession();
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: "local" });
   })().finally(() => {
     signOutPromise = null;
   });
@@ -334,20 +334,26 @@ export async function callSupabaseFunction<T = unknown>(
 
 export interface TenantDTO {
   id: string;
+  user_id?: string;
   name?: string;
   code?: string;
   company?: string;
   company_name?: string;
   type?: string;
   tenant_type?: string;
+  owner_id?: string;
+  owner_name?: string;
   email?: string;
   owner_email?: string;
   phone?: string;
   registration_number?: string;
   reg_number?: string;
   submitted_at?: string;
+  approved_at?: string;
   created_at?: string;
   status?: string;
+  onboarding_status?: string;
+  mobile_access_ready?: boolean;
 }
 
 export interface ServiceRequestDTO {
@@ -391,6 +397,10 @@ export interface ProviderPresenceDTO {
   lat?: number | string;
   lng?: number | string;
   phone?: string;
+  tenant_id?: string;
+  tenant_type?: string;
+  assignable?: boolean;
+  assignable_reason?: string | null;
   updated_at?: string;
 }
 
@@ -419,6 +429,7 @@ export interface BillingInvoiceDTO {
   date?: string;
   client?: string;
   provider?: string;
+  provider_id?: string;
   intervention_id?: string;
   amount?: number | string;
   commission?: number | string;
@@ -434,6 +445,7 @@ export interface BillingTotalsDTO {
 export interface TechnicianDTO {
   id?: string;
   provider_id?: string;
+  provider_tenant_id?: string;
   name?: string;
   provider?: string;
   status?: "online" | "offline" | "on_job" | string;
