@@ -1,0 +1,8 @@
+Ticket: WF-008
+Environment: staging
+Tester: codex
+Start time (UTC): 2026-03-10T15:04:53Z
+End time (UTC):
+Admin web revision:
+Mobile build info:
+Notes:

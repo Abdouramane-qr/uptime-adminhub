@@ -250,8 +250,14 @@ const AdminOnboarding = () => {
     rejected: { label: "Rejeté", color: "bg-destructive/10 text-destructive border-destructive/20", icon: X },
   };
 
-  const teamMembers = detail?.resources?.technicians ?? detail?.resources?.drivers ?? [];
-  const assetItems = detail?.resources?.pricing ?? detail?.resources?.vehicles ?? [];
+  const teamMembers = detail?.onboarding?.account_type === 'sp' 
+    ? (detail?.resources?.technicians ?? [])
+    : (detail?.resources?.drivers ?? []);
+
+  const assetItems = detail?.onboarding?.account_type === 'sp'
+    ? (detail?.resources?.pricing ?? [])
+    : (detail?.resources?.vehicles ?? []);
+
   const draftRequirementsMet = detail?.onboarding?.account_type === "sp"
     ? teamMembers.length > 0 && assetItems.length > 0
     : detail?.onboarding?.account_type === "fleet_manager"
@@ -262,11 +268,16 @@ const AdminOnboarding = () => {
     <div className="space-y-6 animate-fade-in">
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-foreground tracking-tight">Onboarding</h1>
-          <p className="text-muted-foreground mt-1 flex items-center gap-2">
-            <span>Gestion et validation des dossiers d'inscription</span>
-            <DataSourceBadge backend={true} fallbackAllowed={false} />
-          </p>
+          <h1 className="text-3xl font-bold text-foreground tracking-tight">{t("onboarding.title")}</h1>
+          <div className="text-muted-foreground mt-1 flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span>{t("onboarding.subtitle")}</span>
+              <DataSourceBadge backend={true} fallbackAllowed={false} />
+            </div>
+            <p className="text-sm max-w-3xl opacity-80 italic">
+              {t("onboarding.scope_note")}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -276,7 +287,7 @@ const AdminOnboarding = () => {
           <Input 
             value={search} 
             onChange={(e) => setSearch(e.target.value)} 
-            placeholder="Rechercher une entreprise, email..."
+            placeholder={t("onboarding.search_placeholder")}
             className="pl-9"
           />
         </form>
@@ -285,23 +296,23 @@ const AdminOnboarding = () => {
           onChange={(e) => setStatusFilter(e.target.value)}
           className="h-10 px-3 rounded-xl border border-input bg-card text-sm text-foreground focus:border-primary outline-none transition-all"
         >
-          <option value="all">Tous les statuts</option>
-          <option value="pending_review">En attente de révision</option>
-          <option value="approved">Approuvés</option>
-          <option value="rejected">Rejetés</option>
-          <option value="draft">Brouillons</option>
+          <option value="all">{t("onboarding.all_status")}</option>
+          <option value="pending_review">{t("onboarding.status_pending")}</option>
+          <option value="approved">{t("onboarding.status_approved")}</option>
+          <option value="rejected">{t("onboarding.status_rejected")}</option>
+          <option value="draft">{t("onboarding.status_draft")}</option>
         </select>
         <select
           value={accountTypeFilter}
           onChange={(e) => setAccountTypeFilter(e.target.value)}
           className="h-10 px-3 rounded-xl border border-input bg-card text-sm text-foreground focus:border-primary outline-none transition-all"
         >
-          <option value="all">Tous les types</option>
-          <option value="sp">Prestataires (SP)</option>
-          <option value="fleet_manager">Gestionnaires de flotte</option>
+          <option value="all">{t("onboarding.all_types")}</option>
+          <option value="sp">{t("onboarding.sp")}</option>
+          <option value="fleet_manager">{t("onboarding.fleet")}</option>
         </select>
         <Button onClick={() => loadQueue()} variant="outline" className="rounded-xl">
-          Actualiser
+          {t("onboarding.refresh")}
         </Button>
       </div>
 
@@ -458,19 +469,19 @@ const AdminOnboarding = () => {
                     {detail.onboarding?.status === 'draft' && detail.onboarding?.account_type === 'fleet_manager' && (
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 p-3 rounded-lg border border-border">
                         <Input
-                          value={assetForm.full_name}
-                          onChange={(e) => setAssetForm((prev) => ({ ...prev, full_name: e.target.value }))}
+                          value={techForm.full_name}
+                          onChange={(e) => setTechForm((prev) => ({ ...prev, full_name: e.target.value }))}
                           placeholder="Nom complet"
                         />
                         <Input
-                          value={assetForm.phone}
-                          onChange={(e) => setAssetForm((prev) => ({ ...prev, phone: e.target.value }))}
+                          value={techForm.phone}
+                          onChange={(e) => setTechForm((prev) => ({ ...prev, phone: e.target.value }))}
                           placeholder="Téléphone"
                         />
                         <div className="flex gap-2">
                           <Input
-                            value={assetForm.license_no}
-                            onChange={(e) => setAssetForm((prev) => ({ ...prev, license_no: e.target.value }))}
+                            value={techForm.license_no}
+                            onChange={(e) => setTechForm((prev) => ({ ...prev, license_no: e.target.value }))}
                             placeholder="No permis"
                           />
                           <Button type="button" onClick={() => handleAddResource("drivers")}>Ajouter</Button>
@@ -488,7 +499,11 @@ const AdminOnboarding = () => {
                             </div>
                             <div>
                               <p className="text-sm font-medium">{t.full_name}</p>
-                              <p className="text-xs text-muted-foreground">{t.phone || t.skill}</p>
+                              <div className="flex gap-2 text-xs text-muted-foreground">
+                                {t.phone && <span>{t.phone}</span>}
+                                {t.skill && <span>• {t.skill}</span>}
+                                {t.license_no && <span>• {t.license_no}</span>}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -550,8 +565,12 @@ const AdminOnboarding = () => {
                           <div className="flex items-center gap-3">
                             {a.service_id ? <BadgeEuro className="h-4 w-4 text-primary" /> : <Truck className="h-4 w-4 text-primary" />}
                             <div>
-                              <p className="text-sm font-medium">{a.service_id || a.label}</p>
-                              <p className="text-xs text-muted-foreground">{a.base_price ? `${a.base_price} €` : a.license_plate}</p>
+                              <p className="text-sm font-medium">
+                                {a.service_id ? (serviceCatalog.find(s => s.id === a.service_id)?.label || a.service_id) : a.label}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {a.base_price ? `${a.base_price} €` : `${a.plate || ''} ${a.vehicle_type ? `• ${a.vehicle_type}` : ''}`}
+                              </p>
                             </div>
                           </div>
                         </div>

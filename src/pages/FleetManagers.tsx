@@ -175,10 +175,15 @@ const FleetManagers = () => {
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground tracking-tight">{t("fleet.title")}</h1>
-          <p className="text-muted-foreground mt-1 flex items-center gap-2">
-            <span>{managers.length} {t("fleet.registered")}</span>
-            <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
-          </p>
+          <div className="text-muted-foreground mt-1 flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span>{managers.length} {t("fleet.registered")}</span>
+              <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
+            </div>
+            <p className="text-sm max-w-3xl opacity-80 italic">
+              {t("fleet.scope_note")}
+            </p>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative">

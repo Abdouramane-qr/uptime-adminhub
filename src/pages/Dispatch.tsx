@@ -4,6 +4,7 @@ import "leaflet/dist/leaflet.css";
 import { mockProviders } from "@/data/mockProviders";
 import { ProviderPosition, STATUS_CONFIG, MissionStatus } from "@/types/map";
 import ProviderMarker from "@/components/map/ProviderMarker";
+import InterventionMarker from "@/components/map/InterventionMarker";
 import MissionPanel from "@/components/map/MissionPanel";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -213,6 +214,16 @@ const Dispatch = () => {
   const pendingCount = interventions.filter(i => i.status === "pending").length;
   const activeCount = interventions.filter(i => ["en_route", "arrived", "in_progress"].includes(i.status)).length;
 
+  const mapCenter = useMemo(() => {
+    if (filtered.length > 0) return [filtered[0].lat, filtered[0].lng] as [number, number];
+    if (providers.length > 0) return [providers[0].lat, providers[0].lng] as [number, number];
+    return [12.3714, -1.5197] as [number, number]; // Default to Ouagadougou
+  }, [filtered, providers]);
+
+  useEffect(() => {
+    console.log("Dispatch data - Interventions:", filtered.length, "Providers:", providers.length);
+  }, [filtered, providers]);
+
   const handleAssign = async () => {
     if (!selectedIntervention || !assignProvider) return;
     const selectedProvider = providers.find((provider) => provider.id === assignProvider);
@@ -260,10 +271,15 @@ const Dispatch = () => {
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground tracking-tight">{t("dispatch.title")}</h1>
-          <p className="text-sm text-muted-foreground mt-0.5 flex items-center gap-2">
-            <span>{t("dispatch.subtitle")}</span>
-            <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
-          </p>
+          <div className="text-sm text-muted-foreground mt-0.5 flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span>{t("dispatch.subtitle")}</span>
+              <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
+            </div>
+            <p className="max-w-2xl opacity-80 italic">
+              {t("dispatch.scope_note")}
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-3">
           {pendingCount > 0 && (
@@ -364,9 +380,25 @@ const Dispatch = () => {
         </div>
 
         <div className="lg:col-span-3 relative rounded-2xl overflow-hidden border border-border">
-          <MapContainer center={[48.86, 2.34]} zoom={13} className="h-full w-full" zoomControl={false}>
+          <MapContainer 
+            key={`${providers.length}-${filtered.length}-${mapCenter[0]}`}
+            center={mapCenter} 
+            zoom={13} 
+            className="h-full w-full" 
+            zoomControl={false}
+          >
             <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
             {providers.map(p => <ProviderMarker key={p.id} provider={p} onSelect={setSelectedMapProvider} />)}
+            {filtered.map(i => (
+              <InterventionMarker 
+                key={i.id} 
+                intervention={i} 
+                onSelect={(id) => {
+                  const item = filtered.find(x => x.id === id);
+                  if (item) setSelectedIntervention(item);
+                }} 
+              />
+            ))}
           </MapContainer>
           <MissionPanel provider={selectedMapProvider} onClose={() => setSelectedMapProvider(null)} />
           <div className="absolute bottom-4 left-4 z-[1000] bg-card/90 backdrop-blur-sm border border-border rounded-xl shadow-md p-3">

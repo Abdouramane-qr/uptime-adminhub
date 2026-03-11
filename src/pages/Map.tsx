@@ -72,6 +72,13 @@ const Map = () => {
     };
   }, [apiBacked]);
 
+  useEffect(() => {
+    console.log("Map Providers loaded:", providers.length);
+    if (providers.length > 0) {
+      console.log("First provider position:", providers[0].lat, providers[0].lng);
+    }
+  }, [providers]);
+
   const toggleFilter = (status: MissionStatus) => {
     setActiveFilters((prev) => {
       const next = new Set(prev);
@@ -88,6 +95,11 @@ const Map = () => {
 
   const totalActive = providers.filter((p) => ["en_route", "arrived", "in_progress"].includes(p.status)).length;
   const totalMissions = providers.filter((p) => p.currentMission).length;
+
+  const mapCenter = useMemo(() => {
+    if (providers.length > 0) return [providers[0].lat, providers[0].lng] as [number, number];
+    return [12.3714, -1.5197] as [number, number]; // Default to Ouagadougou (test data center)
+  }, [providers]);
 
   return (
     <div className="space-y-4">
@@ -159,7 +171,8 @@ const Map = () => {
       {/* Map */}
       <div className="relative rounded-xl overflow-hidden border border-border shadow-sm" style={{ height: "calc(100vh - 240px)", minHeight: "400px" }}>
         <MapContainer
-          center={[48.8566, 2.3522]}
+          key={`${providers.length}-${mapCenter[0]}`}
+          center={mapCenter}
           zoom={13}
           className="h-full w-full"
           zoomControl={false}

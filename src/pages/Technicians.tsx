@@ -107,6 +107,9 @@ const Technicians = () => {
             <span>{t("tech.subtitle")}</span>
             <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
           </p>
+          <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+            {t("tech.scope_note")}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-success/10 border border-success/20">

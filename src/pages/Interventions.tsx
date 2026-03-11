@@ -8,7 +8,7 @@ import {
   Zap, Activity, Plus, ChevronRight, Trash2, Edit,
 } from "lucide-react";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -157,7 +157,7 @@ const parseVehicleDetails = (details: string | undefined) => {
   const parsedYear = Number(rawVehicleYear || "");
 
   return {
-    technician: rawTechnician || "Affectation technicien non raccordee",
+    technician: rawTechnician || "Affectation technicien geree par le prestataire",
     vehiclePlate: plate,
     vehicleModel: model,
     vehicleYear: Number.isFinite(parsedYear) && parsedYear > 0 ? parsedYear : new Date().getFullYear(),
@@ -255,7 +255,26 @@ const Interventions = () => {
   const [activeTab, setActiveTab] = useState<"details" | "chat">("details");
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Intervention | null>(null);
+  const [locationType, setLocationType] = useState<"address" | "gps">("address");
   const [form, setForm] = useState(emptyForm);
+
+  const getCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      toast({ title: "Erreur", description: "Géolocalisation non supportée", variant: "destructive" });
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const val = `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
+        setForm(f => ({ ...f, location: val }));
+        setLocationType("gps");
+        toast({ title: "Position récupérée", description: val });
+      },
+      () => {
+        toast({ title: "Erreur", description: "Impossible de récupérer votre position", variant: "destructive" });
+      }
+    );
+  };
 
   const mapServiceRequest = useMemo(
     () => (r: ServiceRequestDTO): Intervention => {
@@ -388,6 +407,19 @@ const Interventions = () => {
     
     try {
       if (apiBacked || !allowFallback) {
+        // Strict coordinate requirement from backend
+        const lat = parsedCoords?.lat ?? 0;
+        const lng = parsedCoords?.lng ?? 0;
+
+        if (locationType === "gps" && !parsedCoords) {
+          toast({ 
+            title: "Format GPS incorrect", 
+            description: "Utilisez le format 'Latitude, Longitude' (ex: 48.85, 2.35)", 
+            variant: "destructive" 
+          });
+          return;
+        }
+
         const created = await createServiceRequest({
           service_type: form.serviceType,
           breakdown_details: [
@@ -395,8 +427,8 @@ const Interventions = () => {
             `Vehicle year: ${form.vehicleYear}`.trim(),
             `Location: ${form.location}`,
           ].join(" | "),
-          pickup_lat: parsedCoords?.lat ?? null,
-          pickup_lng: parsedCoords?.lng ?? null,
+          pickup_lat: lat,
+          pickup_lng: lng,
           customer_tenant_id: selectedFleetManager.id,
           assigned_provider_id: selectedServiceProvider.id,
           status: "assigned",
@@ -533,10 +565,15 @@ const Interventions = () => {
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground tracking-tight">{t("interventions.title")}</h1>
-          <p className="text-muted-foreground mt-1 flex items-center gap-2">
-            <span>{t("interventions.subtitle")}</span>
-            <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
-          </p>
+          <div className="text-muted-foreground mt-1 flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span>{t("interventions.subtitle")}</span>
+              <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
+            </div>
+            <p className="text-sm max-w-3xl opacity-80 italic">
+              {t("interventions.scope_note")}
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-success/10 border border-success/20">
@@ -675,6 +712,9 @@ const Interventions = () => {
                       <DialogTitle className="text-lg font-bold text-foreground font-mono">{selectedIntervention.id}</DialogTitle>
                       <span className={cn("text-xs font-medium px-2.5 py-1 rounded-lg", cfg.bg, cfg.text)}>{cfg.label}</span>
                     </div>
+                    <DialogDescription className="sr-only">
+                      Détails de l'intervention {selectedIntervention.id}
+                    </DialogDescription>
                   </DialogHeader>
                   <div className="mt-3 flex items-center gap-2">
                     <Progress value={pct} className="h-2 flex-1" />
@@ -780,6 +820,9 @@ const Interventions = () => {
         <DialogContent className="max-w-lg rounded-2xl">
           <DialogHeader>
             <DialogTitle className="text-lg font-bold text-foreground">{t("interventions.new")}</DialogTitle>
+            <DialogDescription>
+              Créez une nouvelle demande d'assistance pour une flotte.
+            </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4 py-4">
             <div className="space-y-2">
@@ -801,7 +844,7 @@ const Interventions = () => {
               {apiBacked ? (
                 <Input
                   className="rounded-xl"
-                  value="Affectation technicien non disponible via backend"
+                  value="Affectation technicien geree ensuite par le prestataire"
                   disabled
                 />
               ) : (
@@ -830,13 +873,50 @@ const Interventions = () => {
               <Label>{t("interventions.vehicle_year")}</Label>
               <Input className="rounded-xl" type="number" value={form.vehicleYear} onChange={e => setForm({ ...form, vehicleYear: e.target.value })} />
             </div>
-            <div className="space-y-2">
-              <Label>{t("interventions.location")}</Label>
-              <Input className="rounded-xl" placeholder="Paris 12e, France" value={form.location} onChange={e => setForm({ ...form, location: e.target.value })} />
+            <div className="col-span-2 space-y-3 p-4 bg-muted/30 rounded-2xl border border-border/50">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{t("interventions.location")}</Label>
+                <div className="flex bg-muted p-1 rounded-lg gap-1">
+                  <button 
+                    onClick={() => setLocationType("address")}
+                    className={cn("px-2 py-1 text-[10px] font-bold rounded-md transition-all", locationType === "address" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground")}
+                  >
+                    {t("interventions.location_address")}
+                  </button>
+                  <button 
+                    onClick={() => setLocationType("gps")}
+                    className={cn("px-2 py-1 text-[10px] font-bold rounded-md transition-all", locationType === "gps" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground")}
+                  >
+                    {t("interventions.location_gps")}
+                  </button>
+                </div>
+              </div>
+              
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input 
+                    className="pl-9 rounded-xl" 
+                    placeholder={locationType === "address" ? "Paris 12e, France" : t("interventions.location_placeholder_gps")} 
+                    value={form.location} 
+                    onChange={e => setForm({ ...form, location: e.target.value })} 
+                  />
+                </div>
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  size="icon" 
+                  className="rounded-xl shrink-0" 
+                  title={t("interventions.get_my_location")}
+                  onClick={getCurrentLocation}
+                >
+                  <Navigation className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" className="rounded-xl" onClick={() => setCreateOpen(false)}>{t("common.cancel")}</Button>
+            <Button variant="outline" className="rounded-xl" onClick={() => { setCreateOpen(false); setForm(emptyForm); }}>{t("common.cancel")}</Button>
             <Button className="rounded-xl" onClick={handleCreate}>{t("interventions.create_intervention")}</Button>
           </DialogFooter>
         </DialogContent>

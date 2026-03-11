@@ -3,10 +3,12 @@ import EmptyState from "@/components/EmptyState";
 import {
   Search, Download, Eye, Check, X, ChevronLeft, ChevronRight,
   Building2, Mail, Phone, FileText, Calendar, UserPlus, Pencil, Trash2,
+  Smartphone, KeyRound, Copy, RotateCcw,
 } from "lucide-react";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { useLanguage } from "@/hooks/useLanguage";
@@ -66,6 +68,7 @@ const Accounts = () => {
       regNumber: t.registration_number || t.reg_number || "N/A",
       submitted: submittedAt ? new Date(submittedAt).toLocaleDateString("fr-FR") : "N/A",
       status,
+      code: t.code || undefined,
     };
   };
 
@@ -97,6 +100,8 @@ const Accounts = () => {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [form, setForm] = useState({ company: "", type: "SP" as AccountType, email: "", phone: "", regNumber: "" });
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
+  const [tempPassword, setTempPassword] = useState<string | null>(null);
+  const [tempPasswordModalOpen, setTempPasswordModalOpen] = useState(false);
 
   const filtered = accounts.filter((a) => {
     const matchSearch = a.company.toLowerCase().includes(search.toLowerCase()) || a.email.toLowerCase().includes(search.toLowerCase());
@@ -201,6 +206,7 @@ const Accounts = () => {
         toast({ title: t("accounts.updated"), description: `${form.company} ${t("accounts.updated_desc")}` });
       } else {
         let newAccount: Account;
+        let generatedPassword: string | null = null;
         
         if (apiBacked || !allowFallback) {
           const res = await createAccount({
@@ -209,11 +215,16 @@ const Accounts = () => {
             email: form.email,
             phone: form.phone,
             registration_number: form.regNumber || null,
-          }) as { account?: TenantDTO; item?: TenantDTO };
+          }) as { 
+            ok: boolean; 
+            account?: TenantDTO & { tempPassword?: string }; 
+            item?: TenantDTO & { tempPassword?: string } 
+          };
           
-          const serverItem = res?.item || res?.account;
+          const serverItem = res?.account || res?.item;
           if (serverItem) {
             newAccount = mapTenant(serverItem);
+            generatedPassword = serverItem.tempPassword || null;
           } else {
             // If API succeeded but returned no data (unexpected), create local as fallback
             newAccount = { 
@@ -233,10 +244,16 @@ const Accounts = () => {
             submitted: new Date().toLocaleDateString("fr-FR"), 
             status: "pending" 
           };
+          generatedPassword = "MOCK-TEMP-PASS-123";
         }
         
         setAccounts((prev) => [newAccount, ...prev]);
         toast({ title: t("accounts.created"), description: `${form.company} ${t("accounts.created_desc")}` });
+        
+        if (generatedPassword) {
+          setTempPassword(generatedPassword);
+          setTempPasswordModalOpen(true);
+        }
       }
       setFormOpen(false);
     } catch (e) {
@@ -306,10 +323,15 @@ const Accounts = () => {
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground tracking-tight">{t("accounts.title")}</h1>
-          <p className="text-muted-foreground mt-1 flex items-center gap-2">
-            <span>{t("accounts.subtitle")}</span>
-            <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
-          </p>
+          <div className="text-muted-foreground mt-1 flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span>{t("accounts.subtitle")}</span>
+              <DataSourceBadge backend={apiBacked} fallbackAllowed={allowFallback} />
+            </div>
+            <p className="text-sm max-w-3xl opacity-80 italic">
+              L'administration des comptes permet de gérer les entités SP et Fleet. L'approbation finale et l'activation des ressources métier s'effectuent via le workflow Onboarding.
+            </p>
+          </div>
         </div>
         <button onClick={openCreate} className="h-10 px-4 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity flex items-center gap-2 w-fit">
           <UserPlus className="h-4 w-4" /> {t("accounts.new")}
@@ -408,7 +430,12 @@ const Accounts = () => {
 
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
         <DialogContent className="max-w-md rounded-2xl">
-          <DialogHeader><DialogTitle>{editingAccount ? t("accounts.edit_title") : t("accounts.create_title")}</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>{editingAccount ? t("accounts.edit_title") : t("accounts.create_title")}</DialogTitle>
+            <DialogDescription>
+              {editingAccount ? "Modifiez les informations du compte existant." : "Remplissez les informations pour créer un nouveau compte entreprise."}
+            </DialogDescription>
+          </DialogHeader>
           <div className="space-y-4 mt-2">
             <div><label className="text-sm font-medium text-foreground mb-1 block">{t("accounts.company_label")}</label>
               <input value={form.company} onChange={(e) => setForm(f => ({ ...f, company: e.target.value }))} className="w-full h-10 px-3 rounded-xl border border-input bg-card text-sm text-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder={t("accounts.company_placeholder")} /></div>
@@ -440,6 +467,44 @@ const Accounts = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={tempPasswordModalOpen} onOpenChange={setTempPasswordModalOpen}>
+        <DialogContent className="max-w-sm rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-center text-success flex flex-col items-center gap-2">
+              <Check className="h-10 w-10 p-2 bg-success/10 rounded-full" />
+              {t("accounts.temp_password_title")}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-center text-muted-foreground">
+              {t("accounts.temp_password_desc")}
+            </p>
+            <div className="bg-muted p-4 rounded-xl border border-border flex items-center justify-between">
+              <code className="text-lg font-bold font-mono tracking-wider">{tempPassword}</code>
+              <button 
+                onClick={() => {
+                  if (tempPassword) {
+                    navigator.clipboard.writeText(tempPassword);
+                    toast({ title: t("accounts.copy"), description: "Copié !" });
+                  }
+                }}
+                className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-primary/10 hover:text-primary transition-all"
+              >
+                <Download className="h-4 w-4 rotate-180" />
+              </button>
+            </div>
+          </div>
+          <DialogFooter>
+            <button 
+              onClick={() => setTempPasswordModalOpen(false)}
+              className="w-full h-10 rounded-xl bg-primary text-primary-foreground font-semibold hover:opacity-90 transition-opacity"
+            >
+              Ok
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
         <SheetContent className="w-[480px] sm:max-w-[480px] overflow-y-auto p-0">
@@ -474,6 +539,97 @@ const Accounts = () => {
                       {statusStyles[selectedAccount.status].label}
                     </span>
                   </div>
+
+                  {/* Accès Mobile App */}
+                  {selectedAccount.status === "approved" && (
+                    <div className="mt-8 pt-8 border-t border-border">
+                      <div className="bg-primary/5 rounded-2xl border border-primary/10 p-5 space-y-4">
+                        <div className="flex items-center gap-3">
+                          <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+                            <Smartphone className="h-5 w-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-foreground">{t("accounts.mobile_access_title")}</h4>
+                            <p className="text-[11px] text-muted-foreground">{t("accounts.mobile_access_desc")}</p>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between p-3 bg-card rounded-xl border border-border">
+                            <div className="flex items-center gap-3">
+                              <Building2 className="h-4 w-4 text-muted-foreground" />
+                              <div>
+                                <p className="text-[10px] text-muted-foreground leading-none mb-1">{t("accounts.company_code")}</p>
+                                <p className="text-sm font-bold font-mono text-foreground leading-none">{selectedAccount.code || "N/A"}</p>
+                              </div>
+                            </div>
+                            <button 
+                              onClick={() => {
+                                navigator.clipboard.writeText(selectedAccount.code || "");
+                                toast({ title: t("accounts.copy"), description: "Code copié !" });
+                              }}
+                              className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between p-3 bg-card rounded-xl border border-border">
+                            <div className="flex items-center gap-3">
+                              <Mail className="h-4 w-4 text-muted-foreground" />
+                              <div>
+                                <p className="text-[10px] text-muted-foreground leading-none mb-1">{t("accounts.email")}</p>
+                                <p className="text-sm font-medium text-foreground leading-none">{selectedAccount.email}</p>
+                              </div>
+                            </div>
+                            <button 
+                              onClick={() => {
+                                navigator.clipboard.writeText(selectedAccount.email);
+                                toast({ title: t("accounts.copy"), description: "Email copié !" });
+                              }}
+                              className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex gap-2">
+                          <Button 
+                            variant="outline" 
+                            className="flex-1 rounded-xl h-10 text-xs font-semibold gap-2 border-primary/20 hover:bg-primary/5 hover:text-primary transition-all"
+                            onClick={() => {
+                              const text = `App: Fleet Rescue\nCode: ${selectedAccount.code}\nEmail: ${selectedAccount.email}`;
+                              navigator.clipboard.writeText(text);
+                              toast({ title: t("accounts.copy_all"), description: t("accounts.credentials_copied") });
+                            }}
+                          >
+                            <Copy className="h-3.5 w-3.5" /> {t("accounts.copy_all")}
+                          </Button>
+                          <Button 
+                            variant="outline" 
+                            className="rounded-xl h-10 w-10 p-0 border-info/20 text-info hover:bg-info/5 hover:text-info transition-all"
+                            title={t("accounts.reset_password")}
+                            onClick={async () => {
+                              if (confirm(t("accounts.reset_password_confirm"))) {
+                                try {
+                                  const newPass = Math.random().toString(36).slice(-8);
+                                  await resetTenantOwnerPassword(selectedAccount.id, newPass);
+                                  setTempPassword(newPass);
+                                  setTempPasswordModalOpen(true);
+                                  toast({ title: t("common.success"), description: t("accounts.updated") });
+                                } catch (e) {
+                                  toast({ title: t("common.error"), description: "Échec de réinitialisation", variant: "destructive" });
+                                }
+                              }
+                            }}
+                          >
+                            <RotateCcw className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </TabsContent>
                 <TabsContent value="technicians" className="p-6">
                   {loadingTeamMembers ? (

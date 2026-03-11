@@ -50,10 +50,20 @@ done
 
 SIGNOFF_FILE="${PACK_DIR}/30_signoff.md"
 if [[ -f "$SIGNOFF_FILE" ]]; then
-  if grep -qi "Overall: .*GO" "$SIGNOFF_FILE"; then
+  if rg -qi 'Overall:\s*(GO|\[x\]\s*GO|\[X\]\s*GO)' "$SIGNOFF_FILE"; then
     echo "SIGNOFF: GO marker detected"
   else
     echo "SIGNOFF: GO marker not detected in 30_signoff.md"
+    empty=1
+  fi
+fi
+
+SQL_EVIDENCE_FILE="${PACK_DIR}/20_sql_evidence.txt"
+if [[ -f "$SQL_EVIDENCE_FILE" ]]; then
+  if rg -q "WF-008 SQL evidence extraction completed\." "$SQL_EVIDENCE_FILE"; then
+    echo "SQL:     evidence completion marker detected"
+  else
+    echo "SQL:     completion marker not detected in 20_sql_evidence.txt"
     empty=1
   fi
 fi
